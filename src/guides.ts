@@ -5,11 +5,16 @@
 // https://github.com/lucide-icons/lucide/blob/main/LICENSE
 
 export const GUIDE_KEY = "iconoodle:guide"
+export const HINT_KEY = "iconoodle:hint"
 const LEGACY_GUIDE_KEY = "iconhand:guide"
 
 export function readGuide(storage: Pick<Storage, "getItem">): boolean {
   const saved = storage.getItem(GUIDE_KEY) ?? storage.getItem(LEGACY_GUIDE_KEY)
   return saved !== "0"
+}
+
+export function readHint(storage: Pick<Storage, "getItem">): boolean {
+  return storage.getItem(HINT_KEY) !== "0"
 }
 
 // Slot names that are not the Lucide name.

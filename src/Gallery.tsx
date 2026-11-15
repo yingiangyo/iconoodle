@@ -30,14 +30,20 @@ export function Gallery({ set, onClose }: { set: IconSet; onClose: () => void })
                     strokeLinecap={mark.lineCap}
                     strokeLinejoin={mark.lineJoin}
                   />
-                ) : null}
+                ) : (
+                  <rect x="4" y="4" width="16" height="16" strokeWidth="0.6" strokeOpacity="0.28" />
+                )}
               </svg>
-              <span>{icon.name}</span>
+              <span title={icon.name}>{icon.name}</span>
             </li>
           )
         })}
       </ul>
-      <p className="gallery-note">Read-only. The drawings live in this link.</p>
+      <p className="gallery-note">
+        {drawn === 0
+          ? "Nothing is drawn yet. The names are here so you can see the set."
+          : "Read-only. The drawings live in this link."}
+      </p>
     </div>
   )
 }

@@ -40,7 +40,7 @@ export function Guide({ library, concept }: { library: LibraryId; concept: strin
   if (!Icon) return null
   return (
     <Suspense fallback={null}>
-      <Icon size="100%" strokeWidth={2} aria-hidden />
+      <Icon size="100%" strokeWidth={1.5} aria-hidden />
     </Suspense>
   )
 }

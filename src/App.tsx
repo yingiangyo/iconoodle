@@ -23,7 +23,7 @@ import { EXPORT_KINDS, exportSet, iconSvg, type ExportKind } from "./export.ts"
 import { Gallery } from "./Gallery.tsx"
 import { Guide } from "./Guide.tsx"
 import { guideConcept, themeSlots } from "./glyphs.ts"
-import { GUIDE_KEY, readGuide } from "./guides.ts"
+import { GUIDE_KEY, HINT_KEY, readGuide, readHint } from "./guides.ts"
 import { LIBRARIES, libraryInfo, type LibraryId } from "./libraries.ts"
 import { Mockup } from "./Mockup.tsx"
 import { setFromHash, shareHash } from "./share.ts"
@@ -47,6 +47,7 @@ export default function App() {
   const [view, setView] = useState<"draw" | "set">("draw")
   const [libraryChoice, setLibraryChoice] = useState<LibraryId>("lucide")
   const [guide, setGuide] = useState(() => readGuide(localStorage))
+  const [hint, setHint] = useState(() => readHint(localStorage))
   const [live, setLive] = useState<Stroke | null>(null)
   const [nameDraft, setNameDraft] = useState<string | null>(null)
   const [addDraft, setAddDraft] = useState("")
@@ -107,6 +108,10 @@ export default function App() {
       if (isTyping(event.target)) return
       if (event.key === "Escape" && pickingRef.current && sessionRef.current) {
         setPicking(false)
+        return
+      }
+      if (event.key === "Escape" && viewRef.current === "set") {
+        setView("draw")
         return
       }
       if (!sessionRef.current || pickingRef.current) return
@@ -195,6 +200,15 @@ export default function App() {
     if (!current || !stroke || stroke.samples.length === 0) return
     const result = apply({ kind: "commit", id: current.document.selectedId, stroke })
     if (result?.rejection) setNote("That stroke had no usable points.")
+    else dismissHint()
+  }
+
+  function dismissHint() {
+    setHint((current) => {
+      if (!current) return current
+      localStorage.setItem(HINT_KEY, "0")
+      return false
+    })
   }
 
   function toggleGuide() {
@@ -264,6 +278,7 @@ export default function App() {
     if (!target) return
     commitLive()
     setNote("")
+    if (delta > 0) dismissHint()
     apply({ kind: "select", id: target.id })
   }
 
@@ -440,7 +455,7 @@ export default function App() {
 
   if (view === "draw") {
     return (
-      <div className="app">
+      <div className="app is-drawing">
         <header className="top">
           <div className="brand">
             <Logo />
@@ -448,6 +463,9 @@ export default function App() {
               <h1>iconoodle</h1>
               <p className="progress">
                 {selectedIndex + 1} of {session.document.icons.length}
+              </p>
+              <p className="sr" aria-live="polite">
+                {selected.name}, {selectedIndex + 1} of {session.document.icons.length}
               </p>
             </div>
           </div>
@@ -481,6 +499,7 @@ export default function App() {
                   spellCheck={false}
                   autoCapitalize="none"
                   autoCorrect="off"
+                  enterKeyHint="done"
                   aria-label="Icon name"
                 />
               </label>
@@ -522,6 +541,9 @@ export default function App() {
                   </svg>
                 </div>
               </div>
+              {hint && selected.strokes.length === 0 ? (
+                <p className="hint">Draw this mark, then Next.</p>
+              ) : null}
               {selectedFlags.length > 0 ? (
                 <p className="stage-flag">{selectedFlags.map(driftLabel).join(" · ")}</p>
               ) : null}
@@ -538,6 +560,7 @@ export default function App() {
           <div className="draw-actions">
             <button type="button" onClick={() => stepRef.current(-1)} disabled={!previous}>
               Back
+              <kbd>←</kbd>
             </button>
             <button type="button" onClick={undo} disabled={!canUndo}>
               Undo
@@ -545,8 +568,16 @@ export default function App() {
             <button type="button" onClick={clearIcon} disabled={!canClear}>
               Clear
             </button>
-            <button type="button" className="next" onClick={() => stepRef.current(1)} disabled={!upcoming}>
+            <button
+              type="button"
+              className="next"
+              onClick={() => stepRef.current(1)}
+              disabled={!upcoming}
+              title={upcoming ? `Next, ${upcoming.name}` : "Last icon"}
+              aria-keyshortcuts="Enter ArrowRight"
+            >
               {upcoming ? `Next ${upcoming.name}` : "Last icon"}
+              {upcoming ? <kbd>↵</kbd> : null}
             </button>
           </div>
         </main>
@@ -570,7 +601,8 @@ export default function App() {
         <button type="button" className="next" onClick={() => setView("draw")}>
           Back to drawing
         </button>
-        <div className="controls">
+      </header>
+      <div className="toolbar">
           <div className="control">
             <span className="control-label">Weight</span>
             <div className="segment" role="group" aria-label="Stroke weight">
@@ -614,8 +646,7 @@ export default function App() {
               Share
             </button>
           </div>
-        </div>
-      </header>
+      </div>
 
       <Suspense fallback={null}>
       <div className="desk">
@@ -636,6 +667,7 @@ export default function App() {
                   else slotRefs.current.delete(icon.id)
                 }}
                 className={icon.id === selected.id ? "slot is-selected" : "slot"}
+                title={icon.name}
                 onClick={() => choose(icon.id)}
               >
                 <span className="slot-preview">
@@ -857,9 +889,7 @@ function ThemePicker({
     <main className="picker">
       <div className="picker-copy">
         <h2>{replacing ? "New set" : "Start a set"}</h2>
-        <p>
-          Choose a tracing library, then the kind of product. Slots arrive named for that library, with a faint outline to trace. The outline stays in the editor.
-        </p>
+        <p>Choose a library and a product. Each slot arrives named, with a faint outline you can trace.</p>
         <div className="segment library-pick" role="group" aria-label="Tracing library">
           {LIBRARIES.map((item) => (
             <button
@@ -905,7 +935,10 @@ function ThemePicker({
               </span>
               <span className="theme-label">{theme.label}</span>
               <span className="theme-blurb">{theme.blurb}</span>
-              <span className="theme-names">{slots.length} icons</span>
+              <span className="theme-names" title={slots.map((slot) => slot.name).join(", ")}>
+                {slots.length === 1 ? "1 icon" : `${slots.length} icons`}
+                {slots.length > 0 ? ` · ${slots.slice(0, 3).map((slot) => slot.name).join(", ")}` : ""}
+              </span>
             </button>
           )
         })}
@@ -1053,7 +1086,8 @@ function Logo() {
 
 function samplesFrom(event: ReactPointerEvent<SVGSVGElement>): Sample[] {
   const native = event.nativeEvent
-  const points = typeof native.getCoalescedEvents === "function" ? native.getCoalescedEvents() : [native]
+  const coalesced = typeof native.getCoalescedEvents === "function" ? native.getCoalescedEvents() : []
+  const points = coalesced.length > 0 ? coalesced : [native]
   const rect = event.currentTarget.getBoundingClientRect()
   const samples: Sample[] = []
   for (const point of points) {

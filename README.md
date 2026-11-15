@@ -11,6 +11,8 @@ npm run dev
 
 The dev server listens on http://127.0.0.1:43123.
 
+Design notes for later work live in `.cursor/skills/`. They are Emil Kowalski's skills, MIT licensed, copied from [emilkowalski/skills](https://github.com/emilkowalski/skills).
+
 `npm run build` typechecks and builds the static app. `npm run verify` checks the document, the stroke path, and the downloads without a browser.
 
 ## Drawing
