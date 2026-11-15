@@ -26,9 +26,18 @@ export type Icon = {
   readonly strokes: readonly Stroke[]
 }
 
+export type Cleanup = {
+  readonly straight: boolean
+  readonly circle: boolean
+  readonly close: boolean
+}
+
+export const CLEANUP_OFF: Cleanup = { straight: false, circle: false, close: false }
+
 export type IconSet = {
   readonly weight: Weight
   readonly snap: boolean
+  readonly cleanup: Cleanup
   readonly selectedId: IconId
   readonly icons: readonly [Icon, ...Icon[]]
 }
@@ -58,6 +67,7 @@ export type Command =
   | { readonly kind: "delete"; readonly id: IconId }
   | { readonly kind: "weight"; readonly weight: Weight }
   | { readonly kind: "snap"; readonly snap: boolean }
+  | { readonly kind: "cleanup"; readonly cleanup: Cleanup }
   | { readonly kind: "commit"; readonly id: IconId; readonly stroke: Stroke }
   | { readonly kind: "clear"; readonly id: IconId }
   | { readonly kind: "undo" }
@@ -90,7 +100,19 @@ export function loadSet(storage: Pick<Storage, "getItem">): IconSet | null {
 }
 
 export function saveSet(storage: Pick<Storage, "setItem">, set: IconSet): void {
-  storage.setItem(STORAGE_KEY, serialize(set))
+  storage.setItem(STORAGE_KEY, setToJSON(set))
+}
+
+export function setToJSON(set: IconSet): string {
+  return serialize(set)
+}
+
+export function setFromJSON(raw: string): IconSet | null {
+  try {
+    return parseSet(JSON.parse(raw))
+  } catch {
+    return null
+  }
 }
 
 export function openSession(saved: IconSet | null): Session {
@@ -111,6 +133,8 @@ export function edit(session: Session, command: Command): EditResult {
       return setWeight(session, command.weight)
     case "snap":
       return setSnap(session, command.snap)
+    case "cleanup":
+      return setCleanup(session, command.cleanup)
     case "commit":
       return commit(session, command.id, command.stroke)
     case "clear":
@@ -139,6 +163,7 @@ export function createSet(names: readonly string[]): IconSet {
   return {
     weight: 2,
     snap: false,
+    cleanup: CLEANUP_OFF,
     selectedId: list[0].id,
     icons: list,
   }
@@ -205,6 +230,14 @@ function setWeight(session: Session, weight: Weight): EditResult {
 function setSnap(session: Session, snap: boolean): EditResult {
   if (session.document.snap === snap) return same(session)
   return remember(session, { ...session.document, snap })
+}
+
+function setCleanup(session: Session, cleanup: Cleanup): EditResult {
+  const current = session.document.cleanup
+  if (current.straight === cleanup.straight && current.circle === cleanup.circle && current.close === cleanup.close) {
+    return same(session)
+  }
+  return remember(session, { ...session.document, cleanup })
 }
 
 function commit(session: Session, id: IconId, stroke: Stroke): EditResult {
@@ -331,6 +364,7 @@ function serialize(set: IconSet): string {
     version: 1,
     weight: set.weight,
     snap: set.snap,
+    cleanup: set.cleanup,
     selectedId: set.selectedId,
     icons: set.icons.map((icon) => ({
       id: icon.id,
@@ -368,8 +402,18 @@ function parseSet(value: unknown): IconSet | null {
   return {
     weight: value.weight,
     snap: value.snap,
+    cleanup: parseCleanup(value.cleanup),
     selectedId: value.selectedId,
     icons: list,
+  }
+}
+
+function parseCleanup(value: unknown): Cleanup {
+  if (!isRecord(value)) return CLEANUP_OFF
+  return {
+    straight: value.straight === true,
+    circle: value.circle === true,
+    close: value.close === true,
   }
 }
 

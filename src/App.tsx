@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react"
+import { checkSet, driftLabel, type Drift } from "./check.ts"
 import { compileIcon, type Mark } from "./compile.ts"
 import {
   ARTBOARD,
@@ -9,6 +10,7 @@ import {
   loadSet,
   openSession,
   saveSet,
+  type Cleanup,
   type Command,
   type EditResult,
   type IconId,
@@ -16,9 +18,12 @@ import {
   type Session,
   type Stroke,
 } from "./document.ts"
-import { EXPORT_KINDS, exportSet, type ExportKind } from "./export.ts"
+import { EXPORT_KINDS, exportSet, iconSvg, type ExportKind } from "./export.ts"
+import { Gallery } from "./Gallery.tsx"
 import { Guide } from "./Guide.tsx"
 import { GUIDE_KEY, guideKey } from "./guides.ts"
+import { Mockup } from "./Mockup.tsx"
+import { setFromHash, shareHash } from "./share.ts"
 import { THEMES, type ThemePack } from "./themes.ts"
 
 const SIZES = [16, 20, 24, 32] as const
@@ -26,6 +31,8 @@ const EXPORT_LABELS: Record<ExportKind, string> = {
   "svg-zip": "SVG files",
   sprite: "Sprite",
   "react-zip": "React",
+  variants: "Variants",
+  sheet: "Figma sheet",
 }
 
 export default function App() {
@@ -39,7 +46,9 @@ export default function App() {
   const [nameDraft, setNameDraft] = useState<string | null>(null)
   const [addDraft, setAddDraft] = useState("")
   const [note, setNote] = useState("")
+  const [status, setStatus] = useState("")
   const [exportError, setExportError] = useState("")
+  const [gallery, setGallery] = useState(() => setFromHash(location.hash))
   const sessionRef = useRef(session)
   const pickingRef = useRef(picking)
   const liveRef = useRef<Stroke | null>(null)
@@ -125,6 +134,18 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
+  }, [])
+
+  const flags = useMemo((): ReadonlyMap<IconId, readonly Drift[]> => {
+    return session ? checkSet(session.document) : new Map()
+  }, [session])
+
+  useEffect(() => {
+    function onHash() {
+      setGallery(setFromHash(location.hash))
+    }
+    window.addEventListener("hashchange", onHash)
+    return () => window.removeEventListener("hashchange", onHash)
   }, [])
 
   const marks = useMemo(() => {
@@ -255,6 +276,38 @@ export default function App() {
     setNote(result?.rejection === "last-icon" ? "Keep at least one icon." : "")
   }
 
+  async function copySvg() {
+    const current = sessionRef.current
+    if (!current) return
+    const text = iconSvg(current.document, current.document.selectedId)
+    try {
+      await navigator.clipboard.writeText(text)
+      setStatus("SVG copied.")
+      setExportError("")
+    } catch {
+      setExportError("Could not copy the SVG.")
+    }
+  }
+
+  async function shareSet() {
+    const current = sessionRef.current
+    if (!current) return
+    const url = `${location.origin}${location.pathname}${location.search}#${shareHash(current.document)}`
+    try {
+      await navigator.clipboard.writeText(url)
+      setStatus("Share link copied.")
+      setExportError("")
+    } catch {
+      setExportError("Could not copy the share link.")
+    }
+  }
+
+  function setCleanup(patch: Partial<Cleanup>) {
+    const current = sessionRef.current
+    if (!current) return
+    apply({ kind: "cleanup", cleanup: { ...current.document.cleanup, ...patch } })
+  }
+
   async function download(kind: ExportKind) {
     const current = sessionRef.current
     if (!current) return
@@ -299,6 +352,18 @@ export default function App() {
     commitLive()
   }
 
+  if (gallery) {
+    return (
+      <Gallery
+        set={gallery}
+        onClose={() => {
+          history.pushState(null, "", location.pathname + location.search)
+          setGallery(null)
+        }}
+      />
+    )
+  }
+
   if (!session || !selected || picking) {
     return (
       <div className="app is-picking">
@@ -326,6 +391,7 @@ export default function App() {
   const canUndo = live !== null || session.past.length > 0
   const canRedo = live === null && session.future.length > 0
   const canClear = live !== null || selected.strokes.length > 0
+  const selectedFlags = flags.get(selected.id) ?? []
 
   return (
     <div className="app">
@@ -377,6 +443,9 @@ export default function App() {
                 {EXPORT_LABELS[kind]}
               </button>
             ))}
+            <button type="button" className="export" onClick={() => void shareSet()}>
+              Share
+            </button>
           </div>
         </div>
       </header>
@@ -415,6 +484,11 @@ export default function App() {
                 </span>
                 <span className="slot-name">{icon.name}</span>
                 {icon.strokes.length > 0 ? <span className="slot-dot" /> : null}
+                {(flags.get(icon.id)?.length ?? 0) > 0 ? (
+                  <span className="slot-flag" title={(flags.get(icon.id) ?? []).map(driftLabel).join(". ")}>
+                    {(flags.get(icon.id) ?? []).length}
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -519,8 +593,42 @@ export default function App() {
               >
                 Delete
               </button>
+              <button type="button" onClick={() => void copySvg()}>
+                Copy SVG
+              </button>
             </div>
+            <div className="tools tidy" role="group" aria-label="Stroke cleanup">
+              <button
+                type="button"
+                aria-pressed={session.document.cleanup.straight}
+                onClick={() => setCleanup({ straight: !session.document.cleanup.straight })}
+              >
+                Straight
+              </button>
+              <button
+                type="button"
+                aria-pressed={session.document.cleanup.circle}
+                onClick={() => setCleanup({ circle: !session.document.cleanup.circle })}
+              >
+                Circle
+              </button>
+              <button
+                type="button"
+                aria-pressed={session.document.cleanup.close}
+                onClick={() => setCleanup({ close: !session.document.cleanup.close })}
+              >
+                Close
+              </button>
+            </div>
+            {selectedFlags.length > 0 ? (
+              <ul className="drifts">
+                {selectedFlags.map((drift) => (
+                  <li key={drift.kind}>{driftLabel(drift)}</li>
+                ))}
+              </ul>
+            ) : null}
             {note ? <p className="note">{note}</p> : null}
+            {status ? <p className="status">{status}</p> : null}
             {exportError ? <p className="note">{exportError}</p> : null}
           </div>
         </section>
@@ -536,6 +644,7 @@ export default function App() {
           <Ground title="Dark" tone="dark" marks={marks} names={session.document.icons.map((icon) => icon.name)} ids={session.document.icons.map((icon) => icon.id)} onChoose={choose} />
         </div>
       </section>
+      <Mockup marks={marks} />
       <Colophon />
     </div>
   )

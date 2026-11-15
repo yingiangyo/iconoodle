@@ -1,4 +1,5 @@
 import JSZip from "jszip"
+import { checkSet, type Drift } from "./check.ts"
 import { compileIcon } from "./compile.ts"
 import {
   STORAGE_KEY,
@@ -12,7 +13,8 @@ import {
   type Sample,
   type Stroke,
 } from "./document.ts"
-import { exportSet } from "./export.ts"
+import { exportSet, iconSvg } from "./export.ts"
+import { setFromHash, shareHash } from "./share.ts"
 import { guideKey } from "./guides.ts"
 import { THEMES } from "./themes.ts"
 
@@ -157,6 +159,105 @@ const blankZip = await JSZip.loadAsync(await blank.blob.arrayBuffer())
 const wallet = await blankZip.file("wallet.svg")?.async("string")
 check(typeof wallet === "string" && !wallet.includes("<path"), "a blank icon exports no guide path")
 
+saveSet(memory, drawn.session.document)
+const savedRaw = memory.getItem(STORAGE_KEY)
+if (savedRaw) {
+  const parsed = JSON.parse(savedRaw) as { cleanup?: unknown }
+  delete parsed.cleanup
+  memory.setItem(STORAGE_KEY, JSON.stringify(parsed))
+}
+const legacy = loadSet(memory)
+check(legacy?.cleanup.straight === false && legacy.cleanup.circle === false && legacy.cleanup.close === false, "old saves default cleanup off")
+
+const wobble = edit(starter, {
+  kind: "commit",
+  id: home,
+  stroke: stroke([
+    [3, 12],
+    [6, 12.45],
+    [9, 11.6],
+    [12, 12.35],
+    [15, 11.7],
+    [18, 12.4],
+    [21, 12.05],
+  ]),
+}).session
+const straightened = compileIcon(
+  { ...wobble.document, cleanup: { straight: true, circle: false, close: false } },
+  home,
+  null,
+)
+check(/^M[\d.]+ [\d.]+L[\d.]+ [\d.]+$/.test(straightened.d), "a near-straight stroke becomes one line")
+
+let roundish = starter
+roundish = edit(roundish, { kind: "commit", id: home, stroke: circleStroke(12, 12, 6, 18, 0.2) }).session
+const circled = compileIcon(
+  { ...roundish.document, cleanup: { straight: false, circle: true, close: false } },
+  home,
+  null,
+)
+check(circled.d.includes("A") && circled.d.endsWith("Z"), "a near-circle becomes a circle")
+
+let square = starter
+square = edit(square, {
+  kind: "commit",
+  id: home,
+  stroke: stroke([
+    [4, 4],
+    [12, 4.3],
+    [20, 4.1],
+    [20.2, 12],
+    [20, 20],
+    [12, 19.7],
+    [4.1, 20],
+    [3.9, 12],
+    [4, 5.05],
+  ]),
+}).session
+const closed = compileIcon(
+  { ...square.document, cleanup: { straight: true, circle: false, close: true } },
+  home,
+  null,
+)
+check(closed.d.endsWith("Z"), "a near-closed shape closes")
+check((closed.d.match(/L/g)?.length ?? 0) >= 3, "the closed shape keeps its corners")
+
+const compared = buildCompared()
+const drifts = checkSet(compared)
+  const byName = new Map<string, readonly Drift[]>(
+    compared.icons.map((icon) => [icon.name, drifts.get(icon.id) ?? []]),
+  )
+check(byName.get("steady")?.length === 0, "a matching icon is not flagged")
+check(byName.get("tiny")?.some((drift) => drift.kind === "size" && !drift.larger) === true, "a tiny icon is flagged for size")
+check(byName.get("edge")?.some((drift) => drift.kind === "padding" && drift.tight) === true, "an edge icon is flagged for padding")
+check(byName.get("dense")?.some((drift) => drift.kind === "weight" && drift.heavy) === true, "a dense icon is flagged for weight")
+
+const variants = await exportSet(drawn.session.document, "variants")
+check(variants.filename === "iconhand-variants.zip", "variants zip name")
+const variantZip = await JSZip.loadAsync(await variants.blob.arrayBuffer())
+const squareSvg = await variantZip.file("square/2.5/home.svg")?.async("string")
+const buttSvg = await variantZip.file("butt/1.5/home.svg")?.async("string")
+const roundSvg = await variantZip.file("round/2/home.svg")?.async("string")
+check(squareSvg?.includes('stroke-linecap="square"') === true, "square cap is exported")
+check(squareSvg?.includes('stroke-linejoin="miter"') === true, "square style uses a miter join")
+check(squareSvg?.includes('stroke-width="2.5"') === true, "variant keeps the 2.5 weight")
+check(buttSvg?.includes('stroke-linecap="butt"') === true && buttSvg.includes('stroke-linejoin="bevel"'), "butt cap and bevel join are exported")
+check(buttSvg?.includes('stroke-width="1.5"') === true, "variant keeps the 1.5 weight")
+check(roundSvg?.includes('stroke-linecap="round"') === true, "round cap is exported")
+
+const sheet = await exportSet(drawn.session.document, "sheet")
+const sheetText = await sheet.blob.text()
+check(sheet.filename === "iconhand-sheet.svg", "sheet filename")
+check(sheetText.includes('<g id="home"') && sheetText.includes('<g id="search"'), "sheet groups are named")
+check(sheetText.includes("translate("), "sheet places each icon")
+check(iconSvg(drawn.session.document, home).includes('viewBox="0 0 24 24"'), "clipboard svg is a 24 icon")
+
+const hash = shareHash(drawn.session.document)
+const shared = setFromHash(`#${hash}`)
+check(shared?.icons[0].name === "home", "share link restores the first name")
+check(shared?.icons[0].strokes.length === 1, "share link restores the strokes")
+check(shared?.weight === drawn.session.document.weight, "share link restores the weight")
+
 if (failures.length > 0) {
   throw new Error(failures.join("\n"))
 }
@@ -165,4 +266,40 @@ console.log("verify ok")
 function stroke(points: readonly (readonly [number, number])[]): Stroke {
   const samples: Sample[] = points.map(([x, y]) => ({ x, y, pressure: 0.5 }))
   return { samples }
+}
+
+function circleStroke(cx: number, cy: number, radius: number, count: number, gap: number): Stroke {
+  const samples: Sample[] = []
+  const sweep = Math.PI * 2 - gap
+  for (let index = 0; index <= count; index += 1) {
+    const angle = -Math.PI / 2 + (sweep * index) / count
+    samples.push({ x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle), pressure: 0.5 })
+  }
+  return { samples }
+}
+
+function buildCompared() {
+  let session = openSession(createSet(["steady", "steady-b", "steady-c", "tiny", "edge", "dense"]))
+  const commit = (name: string, strokes: Stroke[]) => {
+    const icon = session.document.icons.find((item) => item.name === name)
+    if (!icon) throw new Error(name)
+    for (const item of strokes) session = edit(session, { kind: "commit", id: icon.id, stroke: item }).session
+  }
+  const steady = stroke([
+    [4, 6],
+    [20, 6],
+    [20, 18],
+    [4, 18],
+    [4, 6],
+  ])
+  commit("steady", [steady])
+  commit("steady-b", [steady])
+  commit("steady-c", [steady])
+  commit("tiny", [stroke([[11, 11], [12, 12]])])
+  commit("edge", [stroke([[0.2, 12], [23.6, 12]])])
+  commit("dense", [
+    stroke([[4, 4], [20, 8], [4, 12], [20, 16], [4, 20]]),
+    stroke([[4, 8], [20, 4], [4, 16], [20, 12], [4, 18], [20, 20]]),
+  ])
+  return session.document
 }

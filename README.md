@@ -23,6 +23,16 @@ The dev server listens on http://127.0.0.1:43123.
 
 `src/themes.ts` is the list of starter names for each product type. The first screen, and New set, ask you to pick one. UI basics is the same set the app used to open with.
 
+## The rest of the set
+
+`src/check.ts` compares each drawn icon with the median of the set. It flags optical size, keyline padding, and visual weight, and the same flags show on the slot and under the artboard.
+
+Straight, Circle, and Close run when a stroke is committed. They live on the set, next to snap, and they do not rewrite the stored samples. Straight collapses a wobble that stays within 0.6 units of a line. Circle replaces a stroke that already fits a circle or a wide arc. Close joins ends that are already within 1.4 units. The pen you are still drawing is left alone.
+
+Variants downloads the set nine times: round, square, and butt, at 1.5, 2, and 2.5. SVG has no square or butt join, so square uses a miter join and butt uses a bevel join. Copy SVG puts the selected icon on the clipboard. Figma sheet is one SVG with a named group per icon, spaced on a grid so the paste lands as separate layers.
+
+Share copies a read-only link. The set is compressed with `lz-string` into the URL hash. Opening it shows a gallery and does not write over the set in this browser. There is no server.
+
 ## Tracing guides
 
 `src/guides.ts` maps a slot name to a Lucide icon. `src/Guide.tsx` loads that icon only when the slot is on screen, one chunk per glyph, so the rest of the library stays out of the first download. The guide is a faint outline behind the 24 by 24 grid. Guide, or H, hides it. Empty slots show the same outline. The preview strip does not, because that strip is the export.

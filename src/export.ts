@@ -1,8 +1,14 @@
 import JSZip from "jszip"
-import { compileIcon, type Mark } from "./compile.ts"
-import { ARTBOARD, type IconSet } from "./document.ts"
+import { compileIcon, type LineCap, type LineJoin, type Mark } from "./compile.ts"
+import { ARTBOARD, WEIGHTS, type IconId, type IconSet } from "./document.ts"
 
-export const EXPORT_KINDS = ["svg-zip", "sprite", "react-zip"] as const
+export const EXPORT_KINDS = ["svg-zip", "sprite", "react-zip", "variants", "sheet"] as const
+
+export const CAP_STYLES = [
+  { id: "round", lineCap: "round", lineJoin: "round" },
+  { id: "square", lineCap: "square", lineJoin: "miter" },
+  { id: "butt", lineCap: "butt", lineJoin: "bevel" },
+] as const satisfies readonly { id: string; lineCap: LineCap; lineJoin: LineJoin }[]
 
 export type ExportKind = (typeof EXPORT_KINDS)[number]
 
@@ -26,11 +32,54 @@ export async function exportSet(set: IconSet, kind: ExportKind): Promise<Downloa
       return textFile("iconhand.svg", spriteDocument(marks), "image/svg+xml")
     case "react-zip":
       return zipFiles("iconhand-react.zip", reactFiles(marks))
+    case "variants":
+      return zipFiles("iconhand-variants.zip", variantFiles(set))
+    case "sheet":
+      return textFile("iconhand-sheet.svg", sheetDocument(marks), "image/svg+xml")
     default: {
       const never: never = kind
       throw new Error(`Unknown export ${JSON.stringify(never)}`)
     }
   }
+}
+
+export function iconSvg(set: IconSet, iconId: IconId): string {
+  return svgDocument(compileIcon(set, iconId, null))
+}
+
+function variantFiles(set: IconSet): { name: string; body: string }[] {
+  const files: { name: string; body: string }[] = []
+  for (const style of CAP_STYLES) {
+    for (const weight of WEIGHTS) {
+      for (const icon of set.icons) {
+        const mark = compileIcon(set, icon.id, null, {
+          weight,
+          lineCap: style.lineCap,
+          lineJoin: style.lineJoin,
+        })
+        files.push({ name: `${style.id}/${weight}/${icon.name}.svg`, body: svgDocument(mark) })
+      }
+    }
+  }
+  return files
+}
+
+function sheetDocument(marks: readonly { name: string; mark: Mark }[]): string {
+  const columns = 8
+  const cell = 32
+  const rows = Math.max(1, Math.ceil(marks.length / columns))
+  const width = columns * cell
+  const height = rows * cell
+  const groups = marks
+    .map((item, index) => {
+      const column = index % columns
+      const row = Math.floor(index / columns)
+      const x = column * cell + 4
+      const y = row * cell + 4
+      return `<g id="${item.name}" transform="translate(${x} ${y})">${paintedPath(item.mark)}</g>`
+    })
+    .join("")
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" fill="none" stroke="currentColor">${groups}</svg>`
 }
 
 function svgDocument(mark: Mark): string {
