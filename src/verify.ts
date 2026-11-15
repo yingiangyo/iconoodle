@@ -16,6 +16,7 @@ import {
 import { exportSet, iconSvg } from "./export.ts"
 import { setFromHash, shareHash } from "./share.ts"
 import { guideConcept, themeSlots } from "./glyphs.ts"
+import { cycleChoice } from "./libraries.ts"
 import { guideKey } from "./guides.ts"
 import { THEMES } from "./themes.ts"
 
@@ -165,6 +166,9 @@ if (general) {
   const switched = edit(openSession(heroSet), { kind: "library", library: "phosphor" }).session.document
   check(switched.library === "phosphor" && switched.icons[0].name === hero[0].name, "switching library keeps the names")
   check(guideConcept("phosphor", "home", "house") === "home", "a phosphor guide still resolves home")
+  check(cycleChoice("material", 1) === "off", "cycling libraries wraps to off")
+  check(cycleChoice("off", 1) === "lucide", "cycling off returns to lucide")
+  check(cycleChoice("lucide", -1) === "off", "cycling backward from lucide lands on off")
 }
 
 const blank = await exportSet(createSet(["wallet"]), "svg-zip")

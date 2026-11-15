@@ -17,7 +17,11 @@ Design notes for later work live in `.cursor/skills/`. They are Emil Kowalski's 
 
 ## Drawing
 
-The first screen is one icon. Draw it, then Next (or Enter, or the right arrow) saves the stroke you already committed and opens the next slot. Back and the left arrow return to the previous icon. The count above the name reads like `7 of 24`. The grid, the consistency checker, the size preview, and the mockups live on Set.
+The first screen is one icon. Draw it, then Next (or Enter, or the right arrow) saves the stroke you already committed and opens the next slot. Back and the left arrow return to the previous icon. The count above the name reads like `7 of 24`. `[` and `]` cycle the tracing library, including Off. The chip on the stage opens a preview of the current glyph in every library before you commit to one.
+
+On a phone the canvas fills the width and Back, Undo, the library, and Next sit in a bottom bar. Swipe that bar, or the space under the canvas, to move between icons. The canvas itself stays for drawing. Two fingers tapped together undo. Set opens as a sheet you can drag down. A production build registers a service worker and can be added to the home screen. Share and export use the device share sheet when the browser offers it.
+
+The grid, the consistency checker, the size preview, and the mockups live on Set.
 
 ## Architecture
 

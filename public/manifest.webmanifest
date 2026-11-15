@@ -1,0 +1,15 @@
+{
+  "name": "iconoodle",
+  "short_name": "iconoodle",
+  "description": "Draw an icon set by hand.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#e5e1d8",
+  "theme_color": "#f4f1ea",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

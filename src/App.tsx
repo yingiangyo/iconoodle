@@ -24,7 +24,11 @@ import { Gallery } from "./Gallery.tsx"
 import { Guide } from "./Guide.tsx"
 import { guideConcept, themeSlots } from "./glyphs.ts"
 import { GUIDE_KEY, HINT_KEY, readGuide, readHint } from "./guides.ts"
-import { LIBRARIES, libraryInfo, type LibraryId } from "./libraries.ts"
+import { LIBRARIES, cycleChoice, libraryInfo, type GuideChoice, type LibraryId } from "./libraries.ts"
+import { LibrarySwitch } from "./LibrarySwitch.tsx"
+import { usePhone } from "./phone.ts"
+import { Drawer } from "vaul"
+import "./vaul.css"
 import { Mockup } from "./Mockup.tsx"
 import { setFromHash, shareHash } from "./share.ts"
 import { THEMES, type ThemePack } from "./themes.ts"
@@ -55,16 +59,26 @@ export default function App() {
   const [status, setStatus] = useState("")
   const [exportError, setExportError] = useState("")
   const [gallery, setGallery] = useState(() => setFromHash(location.hash))
+  const phone = usePhone()
   const sessionRef = useRef(session)
   const pickingRef = useRef(picking)
   const viewRef = useRef(view)
+  const guideRef = useRef(guide)
   const stepRef = useRef<(delta: number) => void>(() => {})
+  const cycleRef = useRef<(delta: number) => void>(() => {})
+  const cardRef = useRef<HTMLDivElement>(null)
+  const swipeRef = useRef<{ id: number; x: number; y: number; t: number } | null>(null)
+  const swallowRef = useRef(false)
+  const contactsRef = useRef(new Map<number, { x: number; y: number; moved: boolean; type: string }>())
+  const tapsRef = useRef<number[]>([])
+  const multiRef = useRef(false)
   const liveRef = useRef<Stroke | null>(null)
   const pointerRef = useRef<number | null>(null)
   const slotRefs = useRef(new Map<string, HTMLButtonElement>())
   sessionRef.current = session
   pickingRef.current = picking
   viewRef.current = view
+  guideRef.current = guide
 
   const selected = session
     ? (session.document.icons.find((icon) => icon.id === session.document.selectedId) ??
@@ -123,6 +137,11 @@ export default function App() {
       if (viewRef.current === "draw" && event.key === "ArrowLeft") {
         event.preventDefault()
         stepRef.current(-1)
+        return
+      }
+      if (!event.metaKey && !event.ctrlKey && (event.key === "]" || event.key === "[")) {
+        event.preventDefault()
+        cycleRef.current(event.key === "]" ? 1 : -1)
         return
       }
       const key = event.key.toLowerCase()
@@ -200,7 +219,10 @@ export default function App() {
     if (!current || !stroke || stroke.samples.length === 0) return
     const result = apply({ kind: "commit", id: current.document.selectedId, stroke })
     if (result?.rejection) setNote("That stroke had no usable points.")
-    else dismissHint()
+    else {
+      dismissHint()
+      buzz(8)
+    }
   }
 
   function dismissHint() {
@@ -267,6 +289,31 @@ export default function App() {
     setLive(null)
     if (!current) return
     apply({ kind: "clear", id: current.document.selectedId })
+  }
+
+  function chooseLibrary(choice: GuideChoice) {
+    if (choice === "off") {
+      if (!guideRef.current) return
+      localStorage.setItem(GUIDE_KEY, "0")
+      guideRef.current = false
+      setGuide(false)
+      return
+    }
+    const current = sessionRef.current
+    if (current && current.document.library !== choice) apply({ kind: "library", library: choice })
+    if (!guideRef.current) {
+      localStorage.setItem(GUIDE_KEY, "1")
+      guideRef.current = true
+      setGuide(true)
+    }
+    buzz(8)
+  }
+
+  cycleRef.current = (delta: number) => {
+    const current = sessionRef.current
+    if (!current) return
+    const choice = guideRef.current ? current.document.library : "off"
+    chooseLibrary(cycleChoice(choice, delta))
   }
 
   stepRef.current = (delta: number) => {
@@ -341,6 +388,17 @@ export default function App() {
     const current = sessionRef.current
     if (!current) return
     const url = `${location.origin}${location.pathname}${location.search}#${shareHash(current.document)}`
+    const coarse = window.matchMedia("(pointer: coarse)").matches
+    if (coarse && typeof navigator.share === "function") {
+      try {
+        await navigator.share({ title: "iconoodle", text: "A hand-drawn icon set", url })
+        setStatus("Share sheet opened.")
+        setExportError("")
+        return
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return
+      }
+    }
     try {
       await navigator.clipboard.writeText(url)
       setStatus("Share link copied.")
@@ -362,6 +420,17 @@ export default function App() {
     setExportError("")
     try {
       const file = await exportSet(current.document, kind)
+      const shared = new File([file.blob], file.filename, { type: file.blob.type || "application/octet-stream" })
+      const coarse = window.matchMedia("(pointer: coarse)").matches
+      if (coarse && navigator.canShare?.({ files: [shared] })) {
+        try {
+          await navigator.share({ files: [shared], title: file.filename })
+          setStatus("Share sheet opened.")
+          return
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") return
+        }
+      }
       const url = URL.createObjectURL(file.blob)
       const anchor = document.createElement("a")
       anchor.href = url
@@ -375,8 +444,80 @@ export default function App() {
     }
   }
 
+  function penIsDown() {
+    for (const contact of contactsRef.current.values()) {
+      if (contact.type === "pen") return true
+    }
+    return false
+  }
+
+  function swipeDown(event: ReactPointerEvent<HTMLElement>) {
+    if (!swipeZone(event.target)) return
+    if (event.pointerType === "mouse" && event.button !== 0) return
+    swipeRef.current = { id: event.pointerId, x: event.clientX, y: event.clientY, t: performance.now() }
+  }
+
+  function swipeMove(event: ReactPointerEvent<HTMLElement>) {
+    const start = swipeRef.current
+    if (!start || start.id !== event.pointerId) return
+    const dx = event.clientX - start.x
+    const dy = event.clientY - start.y
+    if (Math.abs(dy) > Math.abs(dx)) return
+    const card = cardRef.current
+    if (!card || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
+    card.style.transition = "none"
+    card.style.transform = `translate3d(${dx}px, 0, 0)`
+  }
+
+  function swipeUp(event: ReactPointerEvent<HTMLElement>) {
+    const start = swipeRef.current
+    if (!start || start.id !== event.pointerId) return
+    swipeRef.current = null
+    const dx = event.clientX - start.x
+    const dy = event.clientY - start.y
+    const dt = Math.max(performance.now() - start.t, 1)
+    const card = cardRef.current
+    const next = dx <= -48 || dx / dt < -0.45
+    const back = dx >= 48 || dx / dt > 0.45
+    const horizontal = Math.abs(dx) > Math.abs(dy) || Math.abs(dx) >= 48
+    const stepped = horizontal && (next || back)
+    if (card) {
+      card.style.transition = stepped || window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "none"
+        : "transform 180ms var(--ease-out)"
+      card.style.transform = ""
+    }
+    if (!stepped) return
+    swallowRef.current = true
+    stepRef.current(next ? 1 : -1)
+    buzz(8)
+  }
+
+  function swallowClick(event: { preventDefault(): void; stopPropagation(): void }) {
+    if (!swallowRef.current) return
+    swallowRef.current = false
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
   function onPointerDown(event: ReactPointerEvent<SVGSVGElement>) {
     if (event.pointerType === "mouse" && event.button !== 0) return
+    if (isPalm(event) || (event.pointerType === "touch" && penIsDown())) return
+    const drawing = pointerRef.current !== null && contactsRef.current.get(pointerRef.current)?.moved
+    if (drawing && event.pointerType === "touch") return
+    contactsRef.current.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+      moved: false,
+      type: event.pointerType,
+    })
+    if (contactsRef.current.size >= 2) {
+      multiRef.current = true
+      liveRef.current = null
+      pointerRef.current = null
+      setLive(null)
+      return
+    }
     event.currentTarget.setPointerCapture(event.pointerId)
     pointerRef.current = event.pointerId
     const stroke = { samples: samplesFrom(event) }
@@ -385,6 +526,13 @@ export default function App() {
   }
 
   function onPointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    const contact = contactsRef.current.get(event.pointerId)
+    if (contact) {
+      const dx = event.clientX - contact.x
+      const dy = event.clientY - contact.y
+      if (dx * dx + dy * dy > 14 * 14) contact.moved = true
+    }
+    if (contactsRef.current.size >= 2 || multiRef.current) return
     if (pointerRef.current !== event.pointerId || !liveRef.current) return
     const stroke = { samples: appendSamples(liveRef.current.samples, samplesFrom(event)) }
     liveRef.current = stroke
@@ -392,6 +540,28 @@ export default function App() {
   }
 
   function onPointerUp(event: ReactPointerEvent<SVGSVGElement>) {
+    const contact = contactsRef.current.get(event.pointerId)
+    contactsRef.current.delete(event.pointerId)
+    const now = performance.now()
+    if (contact && !contact.moved) tapsRef.current.push(now)
+    tapsRef.current = tapsRef.current.filter((time) => now - time < 320)
+    if (tapsRef.current.length >= 2) {
+      tapsRef.current = []
+      multiRef.current = false
+      liveRef.current = null
+      pointerRef.current = null
+      setLive(null)
+      undo()
+      buzz(12)
+      return
+    }
+    if (multiRef.current) {
+      if (contactsRef.current.size === 0) multiRef.current = false
+      liveRef.current = null
+      pointerRef.current = null
+      setLive(null)
+      return
+    }
     if (pointerRef.current !== event.pointerId) return
     if (liveRef.current) {
       const stroke = { samples: appendSamples(liveRef.current.samples, samplesFrom(event)) }
@@ -453,8 +623,7 @@ export default function App() {
   const selectedFlags = flags.get(selected.id) ?? []
   const selectedGuide = guideConcept(session.document.library, selected.concept, selected.name)
 
-  if (view === "draw") {
-    return (
+  const drawing = (
       <div className="app is-drawing">
         <header className="top">
           <div className="brand">
@@ -474,7 +643,14 @@ export default function App() {
           </button>
         </header>
         <Suspense fallback={null}>
-        <main className="draw">
+        <main
+          className="draw"
+          onPointerDown={swipeDown}
+          onPointerMove={swipeMove}
+          onPointerUp={swipeUp}
+          onPointerCancel={swipeUp}
+          onClickCapture={swallowClick}
+        >
           <div className="draw-stage">
             <Peek
               icon={previous}
@@ -483,7 +659,7 @@ export default function App() {
               guide={guide}
               onChoose={previous ? () => choose(previous.id) : undefined}
             />
-            <div className="stage-card">
+            <div className="stage-card" ref={cardRef}>
               <label className="name-field">
                 <span>Name</span>
                 <input
@@ -541,13 +717,15 @@ export default function App() {
                   </svg>
                 </div>
               </div>
-              {hint && selected.strokes.length === 0 ? (
-                <p className="hint">Draw this mark, then Next.</p>
-              ) : null}
-              {selectedFlags.length > 0 ? (
-                <p className="stage-flag">{selectedFlags.map(driftLabel).join(" · ")}</p>
-              ) : null}
-              {note ? <p className="note">{note}</p> : null}
+              <div className="stage-foot">
+                {hint && selected.strokes.length === 0 ? (
+                  <p className="hint">Draw this mark, then Next.</p>
+                ) : null}
+                {selectedFlags.length > 0 ? (
+                  <p className="stage-flag">{selectedFlags.map(driftLabel).join(" · ")}</p>
+                ) : null}
+                {note ? <p className="note">{note}</p> : null}
+              </div>
             </div>
             <Peek
               icon={upcoming}
@@ -568,6 +746,12 @@ export default function App() {
             <button type="button" onClick={clearIcon} disabled={!canClear}>
               Clear
             </button>
+            <LibrarySwitch
+              library={session.document.library}
+              guide={guide}
+              concept={selectedGuide}
+              onPick={chooseLibrary}
+            />
             <button
               type="button"
               className="next"
@@ -580,13 +764,37 @@ export default function App() {
               {upcoming ? <kbd>↵</kbd> : null}
             </button>
           </div>
+          <div className="dock">
+            <button type="button" onClick={() => stepRef.current(-1)} disabled={!previous}>
+              Back
+            </button>
+            <button type="button" onClick={undo} disabled={!canUndo}>
+              Undo
+            </button>
+            <LibrarySwitch
+              library={session.document.library}
+              guide={guide}
+              concept={selectedGuide}
+              onPick={chooseLibrary}
+            />
+            <button
+              type="button"
+              className="next"
+              onClick={() => stepRef.current(1)}
+              disabled={!upcoming}
+              title={upcoming ? `Next, ${upcoming.name}` : "Last icon"}
+            >
+              {upcoming ? `Next ${upcoming.name}` : "Last"}
+            </button>
+          </div>
         </main>
         </Suspense>
       </div>
-    )
-  }
+  )
 
-  return (
+  if (view !== "set") return drawing
+
+  const setPage = (
     <div className="app set-panel">
       <header className="top">
         <div className="brand">
@@ -869,6 +1077,34 @@ export default function App() {
       <Colophon library={session.document.library} />
     </div>
   )
+
+  if (!phone) return setPage
+
+  return (
+    <>
+      {drawing}
+      <Drawer.Root
+        open
+        onOpenChange={(open) => {
+          if (!open) setView("draw")
+        }}
+        shouldScaleBackground={false}
+        setBackgroundColorOnScale={false}
+      >
+        <Drawer.Portal>
+          <Drawer.Overlay className="sheet-overlay" />
+          <Drawer.Content className="sheet" aria-describedby={undefined}>
+            <Drawer.Handle className="sheet-handle" />
+            <div className="sheet-bar">
+                <Drawer.Title className="sheet-title">Set</Drawer.Title>
+              <Drawer.Close className="toggle">Done</Drawer.Close>
+            </div>
+            <div className="sheet-scroll">{setPage}</div>
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
+    </>
+  )
 }
 
 function ThemePicker({
@@ -1119,6 +1355,21 @@ function appendSamples(existing: readonly Sample[], next: readonly Sample[]): Sa
     samples.push(sample)
   }
   return samples
+}
+
+function buzz(ms: number) {
+  if (typeof navigator.vibrate === "function") navigator.vibrate(ms)
+}
+
+function isPalm(event: ReactPointerEvent<SVGSVGElement>): boolean {
+  if (event.pointerType !== "touch") return false
+  return event.nativeEvent.width > 40 || event.nativeEvent.height > 40
+}
+
+function swipeZone(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false
+  if (target.closest(".canvas, .lib-pop, input, textarea, a")) return false
+  return Boolean(target.closest(".draw-actions, .dock, .stage-foot"))
 }
 
 function isTyping(target: EventTarget | null): boolean {

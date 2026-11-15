@@ -63,3 +63,14 @@ export function libraryInfo(id: LibraryId): LibraryInfo {
   if (!found) throw new Error(`Unknown library ${id}`)
   return found
 }
+
+export const GUIDE_CHOICES = [...LIBRARY_IDS, "off"] as const
+
+export type GuideChoice = (typeof GUIDE_CHOICES)[number]
+
+export function cycleChoice(current: GuideChoice, delta: number): GuideChoice {
+  const index = GUIDE_CHOICES.indexOf(current)
+  const next = (index < 0 ? 0 : index) + delta
+  const wrapped = ((next % GUIDE_CHOICES.length) + GUIDE_CHOICES.length) % GUIDE_CHOICES.length
+  return GUIDE_CHOICES[wrapped] ?? "off"
+}
