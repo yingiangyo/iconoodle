@@ -4,6 +4,7 @@ import {
   ARTBOARD,
   WEIGHTS,
   STORAGE_KEY,
+  createSet,
   edit,
   loadSet,
   openSession,
@@ -16,6 +17,9 @@ import {
   type Stroke,
 } from "./document.ts"
 import { EXPORT_KINDS, exportSet, type ExportKind } from "./export.ts"
+import { Guide } from "./Guide.tsx"
+import { GUIDE_KEY, guideKey } from "./guides.ts"
+import { THEMES, type ThemePack } from "./themes.ts"
 
 const SIZES = [16, 20, 24, 32] as const
 const EXPORT_LABELS: Record<ExportKind, string> = {
@@ -25,30 +29,39 @@ const EXPORT_LABELS: Record<ExportKind, string> = {
 }
 
 export default function App() {
-  const [session, setSession] = useState<Session>(() => openSession(loadSet(localStorage)))
+  const [session, setSession] = useState<Session | null>(() => {
+    const saved = loadSet(localStorage)
+    return saved ? openSession(saved) : null
+  })
+  const [picking, setPicking] = useState(() => loadSet(localStorage) === null)
+  const [guide, setGuide] = useState(() => localStorage.getItem(GUIDE_KEY) !== "0")
   const [live, setLive] = useState<Stroke | null>(null)
   const [nameDraft, setNameDraft] = useState<string | null>(null)
   const [addDraft, setAddDraft] = useState("")
   const [note, setNote] = useState("")
   const [exportError, setExportError] = useState("")
   const sessionRef = useRef(session)
+  const pickingRef = useRef(picking)
   const liveRef = useRef<Stroke | null>(null)
   const pointerRef = useRef<number | null>(null)
   const slotRefs = useRef(new Map<string, HTMLButtonElement>())
   sessionRef.current = session
+  pickingRef.current = picking
 
-  const selected =
-    session.document.icons.find((icon) => icon.id === session.document.selectedId) ??
-    session.document.icons[0]
-  const drawn = session.document.icons.filter((icon) => icon.strokes.length > 0).length
+  const selected = session
+    ? (session.document.icons.find((icon) => icon.id === session.document.selectedId) ??
+      session.document.icons[0])
+    : null
+  const drawn = session ? session.document.icons.filter((icon) => icon.strokes.length > 0).length : 0
   const mod = useMemo(() => (navigator.userAgent.includes("Mac") ? "⌘" : "Ctrl"), [])
 
-  const nameValue = nameDraft ?? selected.name
+  const nameValue = selected ? (nameDraft ?? selected.name) : ""
 
   useEffect(() => {
+    if (!selected) return
     const node = slotRefs.current.get(selected.id)
     node?.scrollIntoView({ block: "nearest" })
-  }, [selected.id])
+  }, [selected])
 
   useEffect(() => {
     function onStorage(event: StorageEvent) {
@@ -56,9 +69,17 @@ export default function App() {
       liveRef.current = null
       setLive(null)
       setNameDraft(null)
-      const next = openSession(loadSet(localStorage))
+      const saved = loadSet(localStorage)
+      if (!saved) {
+        sessionRef.current = null
+        setSession(null)
+        setPicking(true)
+        return
+      }
+      const next = openSession(saved)
       sessionRef.current = next
       setSession(next)
+      setPicking(false)
     }
     window.addEventListener("storage", onStorage)
     return () => window.removeEventListener("storage", onStorage)
@@ -67,6 +88,11 @@ export default function App() {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (isTyping(event.target)) return
+      if (event.key === "Escape" && pickingRef.current && sessionRef.current) {
+        setPicking(false)
+        return
+      }
+      if (!sessionRef.current || pickingRef.current) return
       const key = event.key.toLowerCase()
       const modKey = event.metaKey || event.ctrlKey
       if (modKey && key === "z" && event.shiftKey) {
@@ -95,21 +121,22 @@ export default function App() {
         return
       }
       if (key === "g") apply({ kind: "snap", snap: !sessionRef.current.document.snap })
+      if (key === "h") toggleGuide()
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
-  const marks = useMemo(
-    () =>
-      session.document.icons.map((icon) =>
-        compileIcon(session.document, icon.id, icon.id === selected.id ? live : null),
-      ),
-    [session.document, selected.id, live],
-  )
+  const marks = useMemo(() => {
+    if (!session || !selected) return []
+    return session.document.icons.map((icon) =>
+      compileIcon(session.document, icon.id, icon.id === selected.id ? live : null),
+    )
+  }, [session, selected, live])
 
-  function apply(command: Command): EditResult {
+  function apply(command: Command): EditResult | null {
     const current = sessionRef.current
+    if (!current) return null
     const result = edit(current, command)
     sessionRef.current = result.session
     if (result.session.document !== current.document) {
@@ -121,17 +148,42 @@ export default function App() {
   }
 
   function commitLive() {
+    const current = sessionRef.current
     const stroke = liveRef.current
     liveRef.current = null
     pointerRef.current = null
     setLive(null)
-    if (!stroke || stroke.samples.length === 0) return
-    const result = apply({ kind: "commit", id: sessionRef.current.document.selectedId, stroke })
-    if (result.rejection) setNote("That stroke had no usable points.")
+    if (!current || !stroke || stroke.samples.length === 0) return
+    const result = apply({ kind: "commit", id: current.document.selectedId, stroke })
+    if (result?.rejection) setNote("That stroke had no usable points.")
+  }
+
+  function toggleGuide() {
+    setGuide((current) => {
+      const next = !current
+      localStorage.setItem(GUIDE_KEY, next ? "1" : "0")
+      return next
+    })
+  }
+
+  function startTheme(theme: ThemePack) {
+    const next = openSession(createSet(theme.names))
+    sessionRef.current = next
+    liveRef.current = null
+    pointerRef.current = null
+    setLive(null)
+    setNameDraft(null)
+    setAddDraft("")
+    setNote("")
+    setExportError("")
+    saveSet(localStorage, next.document)
+    setSession(next)
+    setPicking(false)
   }
 
   function choose(id: IconId) {
-    if (id === sessionRef.current.document.selectedId) return
+    const current = sessionRef.current
+    if (!current || id === current.document.selectedId) return
     commitLive()
     setNote("")
     apply({ kind: "select", id })
@@ -153,15 +205,19 @@ export default function App() {
   }
 
   function clearIcon() {
+    const current = sessionRef.current
     liveRef.current = null
     pointerRef.current = null
     setLive(null)
-    apply({ kind: "clear", id: sessionRef.current.document.selectedId })
+    if (!current) return
+    apply({ kind: "clear", id: current.document.selectedId })
   }
 
   function commitName() {
+    if (!selected) return
     const result = apply({ kind: "rename", id: selected.id, name: nameValue.trim() })
     setNameDraft(null)
+    if (!result) return
     if (result.rejection === "invalid-name") {
       setNote("Use lowercase letters, numbers, and single hyphens.")
       return
@@ -177,12 +233,13 @@ export default function App() {
     event.preventDefault()
     commitLive()
     const typed = addDraft.trim()
-    apply({ kind: "add" })
+    const added = apply({ kind: "add" })
+    if (!added) return
     if (typed) {
-      const id = sessionRef.current.document.selectedId
+      const id = added.session.document.selectedId
       const result = apply({ kind: "rename", id, name: typed })
-      if (result.rejection === "invalid-name") setNote("Use lowercase letters, numbers, and single hyphens.")
-      else if (result.rejection === "duplicate-name") setNote("That name is already in the set.")
+      if (result?.rejection === "invalid-name") setNote("Use lowercase letters, numbers, and single hyphens.")
+      else if (result?.rejection === "duplicate-name") setNote("That name is already in the set.")
       else setNote("")
     } else {
       setNote("")
@@ -191,15 +248,19 @@ export default function App() {
   }
 
   function deleteIcon() {
+    const current = sessionRef.current
     commitLive()
-    const result = apply({ kind: "delete", id: sessionRef.current.document.selectedId })
-    setNote(result.rejection === "last-icon" ? "Keep at least one icon." : "")
+    if (!current) return
+    const result = apply({ kind: "delete", id: current.document.selectedId })
+    setNote(result?.rejection === "last-icon" ? "Keep at least one icon." : "")
   }
 
   async function download(kind: ExportKind) {
+    const current = sessionRef.current
+    if (!current) return
     setExportError("")
     try {
-      const file = await exportSet(sessionRef.current.document, kind)
+      const file = await exportSet(current.document, kind)
       const url = URL.createObjectURL(file.blob)
       const anchor = document.createElement("a")
       anchor.href = url
@@ -238,6 +299,29 @@ export default function App() {
     commitLive()
   }
 
+  if (!session || !selected || picking) {
+    return (
+      <div className="app is-picking">
+        <header className="top">
+          <div className="brand">
+            <Logo />
+            <div>
+              <h1>iconhand</h1>
+              <p>Hand-drawn icons.</p>
+            </div>
+          </div>
+          {session ? (
+            <button type="button" className="toggle" onClick={() => setPicking(false)}>
+              Back to the set
+            </button>
+          ) : null}
+        </header>
+        <ThemePicker replacing={session !== null} drawn={drawn} onPick={startTheme} />
+        <Colophon />
+      </div>
+    )
+  }
+
   const selectedMark = marks[session.document.icons.findIndex((icon) => icon.id === selected.id)] ?? marks[0]
   const canUndo = live !== null || session.past.length > 0
   const canRedo = live === null && session.future.length > 0
@@ -272,10 +356,20 @@ export default function App() {
           <button
             type="button"
             className="toggle"
+            aria-pressed={guide}
+            onClick={toggleGuide}
+          >
+            Guide
+            <kbd>H</kbd>
+          </button>
+          <button
+            type="button"
+            className="toggle"
             aria-pressed={session.document.snap}
             onClick={() => apply({ kind: "snap", snap: !session.document.snap })}
           >
             Snap
+            <kbd>G</kbd>
           </button>
           <div className="exports">
             {EXPORT_KINDS.map((kind) => (
@@ -308,7 +402,16 @@ export default function App() {
                 onClick={() => choose(icon.id)}
               >
                 <span className="slot-preview">
-                  <MarkView mark={marks[index]} size={36} placeholder />
+                  {guide && icon.strokes.length === 0 && guideKey(icon.name) ? (
+                    <span className="slot-guide">
+                      <Guide name={icon.name} />
+                    </span>
+                  ) : null}
+                  <MarkView
+                    mark={marks[index]}
+                    size={36}
+                    placeholder={!(guide && icon.strokes.length === 0 && guideKey(icon.name))}
+                  />
                 </span>
                 <span className="slot-name">{icon.name}</span>
                 {icon.strokes.length > 0 ? <span className="slot-dot" /> : null}
@@ -327,6 +430,16 @@ export default function App() {
             />
             <button type="submit">Add</button>
           </form>
+          <button
+            type="button"
+            className="new-set"
+            onClick={() => {
+              commitLive()
+              setPicking(true)
+            }}
+          >
+            New set
+          </button>
         </aside>
 
         <section className="stage">
@@ -347,6 +460,12 @@ export default function App() {
               />
             </label>
             <div className="canvas-frame">
+              <div className="canvas-stack">
+              {guide && guideKey(selected.name) ? (
+                <div className="trace" aria-hidden="true">
+                  <Guide name={selected.name} />
+                </div>
+              ) : null}
               <svg
                 className="canvas"
                 viewBox={`0 0 ${ARTBOARD} ${ARTBOARD}`}
@@ -370,12 +489,13 @@ export default function App() {
                     strokeLinejoin="round"
                   />
                 ) : null}
-                {!selectedMark?.d ? (
+                {!selectedMark?.d && !(guide && guideKey(selected.name)) ? (
                   <text x="12" y="13" textAnchor="middle" className="canvas-hint">
                     Draw
                   </text>
                 ) : null}
               </svg>
+              </div>
               {session.document.snap ? <span className="snap-flag">Snap on</span> : null}
             </div>
             <div className="tools">
@@ -416,7 +536,67 @@ export default function App() {
           <Ground title="Dark" tone="dark" marks={marks} names={session.document.icons.map((icon) => icon.name)} ids={session.document.icons.map((icon) => icon.id)} onChoose={choose} />
         </div>
       </section>
+      <Colophon />
     </div>
+  )
+}
+
+function ThemePicker({
+  replacing,
+  drawn,
+  onPick,
+}: {
+  replacing: boolean
+  drawn: number
+  onPick: (theme: ThemePack) => void
+}) {
+  return (
+    <main className="picker">
+      <div className="picker-copy">
+        <h2>{replacing ? "New set" : "Start a set"}</h2>
+        <p>
+          Pick the kind of product. The slots arrive named, and each one can show a faint Lucide outline to trace.
+          The outline stays in the editor.
+        </p>
+        {replacing && drawn > 0 ? (
+          <p className="picker-warn">
+            This replaces the current set, including {drawn === 1 ? "the icon already drawn" : `the ${drawn} icons already drawn`}.
+          </p>
+        ) : null}
+      </div>
+      <div className="themes">
+        {THEMES.map((theme) => (
+          <button key={theme.id} type="button" className="theme" onClick={() => onPick(theme)}>
+            <span className="theme-marks" aria-hidden="true">
+              {theme.names.slice(0, 4).map((name) => (
+                <span key={name}>
+                  <Guide name={name} />
+                </span>
+              ))}
+            </span>
+            <span className="theme-label">{theme.label}</span>
+            <span className="theme-blurb">{theme.blurb}</span>
+            <span className="theme-names">{theme.names.length} icons</span>
+          </button>
+        ))}
+      </div>
+    </main>
+  )
+}
+
+function Colophon() {
+  return (
+    <footer className="colophon">
+      Tracing guides are{" "}
+      <a href="https://lucide.dev" target="_blank" rel="noreferrer">
+        Lucide
+      </a>{" "}
+      icons, © Lucide Contributors,{" "}
+      <a href="https://github.com/lucide-icons/lucide/blob/main/LICENSE" target="_blank" rel="noreferrer">
+        ISC license
+      </a>
+      . They are not included in exports.
+    </footer>
   )
 }
 

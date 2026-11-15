@@ -1,3 +1,5 @@
+import { THEMES } from "./themes.ts"
+
 export const ARTBOARD = 24
 
 export const WEIGHTS = [1.5, 2, 2.5] as const
@@ -65,33 +67,6 @@ export const STORAGE_KEY = "iconhand"
 const HISTORY_LIMIT = 100
 const NAME_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 
-const STARTER_NAMES = [
-  "home",
-  "search",
-  "user",
-  "settings",
-  "heart",
-  "star",
-  "plus",
-  "close",
-  "check",
-  "arrow-left",
-  "arrow-right",
-  "menu",
-  "bell",
-  "mail",
-  "calendar",
-  "camera",
-  "trash",
-  "edit",
-  "share",
-  "download",
-  "upload",
-  "lock",
-  "play",
-  "pause",
-] as const
-
 export function isIconId(value: string): value is IconId {
   return value.length > 0 && !/\s/.test(value)
 }
@@ -151,19 +126,28 @@ export function edit(session: Session, command: Command): EditResult {
   }
 }
 
-function starterSet(): IconSet {
-  const icons: Icon[] = STARTER_NAMES.map((name) => {
-    if (!isIconName(name)) throw new Error(`Starter name is not a slug: ${name}`)
-    return { id: mintId(), name, strokes: [] }
-  })
+export function createSet(names: readonly string[]): IconSet {
+  const icons: Icon[] = []
+  const seen = new Set<string>()
+  for (const name of names) {
+    if (!isIconName(name) || seen.has(name)) throw new Error(`Icon name is not a unique slug: ${name}`)
+    seen.add(name)
+    icons.push({ id: mintId(), name, strokes: [] })
+  }
   const list = nonEmpty(icons)
-  if (!list) throw new Error("Starter set is empty")
+  if (!list) throw new Error("A set needs at least one icon")
   return {
     weight: 2,
     snap: false,
     selectedId: list[0].id,
     icons: list,
   }
+}
+
+function starterSet(): IconSet {
+  const general = THEMES.find((theme) => theme.id === "general")
+  if (!general) throw new Error("Missing general theme")
+  return createSet(general.names)
 }
 
 function select(session: Session, id: IconId): EditResult {

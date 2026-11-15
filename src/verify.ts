@@ -3,6 +3,7 @@ import { compileIcon } from "./compile.ts"
 import {
   STORAGE_KEY,
   WEIGHTS,
+  createSet,
   edit,
   isIconName,
   loadSet,
@@ -12,6 +13,8 @@ import {
   type Stroke,
 } from "./document.ts"
 import { exportSet } from "./export.ts"
+import { guideKey } from "./guides.ts"
+import { THEMES } from "./themes.ts"
 
 const failures: string[] = []
 
@@ -133,6 +136,26 @@ check(index?.includes('export { ArrowLeft } from "./ArrowLeft"') === true, "inde
 const names = starter.document.icons.map((icon) => icon.name)
 check(names.every((name) => isIconName(name)), "starter names are slugs")
 check(WEIGHTS.length === 3, "three weights")
+
+for (const theme of THEMES) {
+  const unique = new Set(theme.names)
+  check(theme.names.length >= 12, `${theme.id} has a full set of names`)
+  check(unique.size === theme.names.length, `${theme.id} names are unique`)
+  check(theme.names.every((name) => isIconName(name)), `${theme.id} names are slugs`)
+  check(theme.names.every((name) => guideKey(name) !== null), `${theme.id} names have a Lucide guide`)
+  const themed = createSet(theme.names)
+  check(themed.icons.every((icon, index) => icon.name === theme.names[index]), `${theme.id} keeps name order`)
+  check(themed.icons.every((icon) => icon.strokes.length === 0), `${theme.id} starts blank`)
+  check(themed.icons.every((icon) => compileIcon(themed, icon.id, null).d === ""), `${theme.id} compiles to no path`)
+}
+
+const general = THEMES.find((theme) => theme.id === "general")
+check(general?.names.join() === names.join(), "general is the starter")
+
+const blank = await exportSet(createSet(["wallet"]), "svg-zip")
+const blankZip = await JSZip.loadAsync(await blank.blob.arrayBuffer())
+const wallet = await blankZip.file("wallet.svg")?.async("string")
+check(typeof wallet === "string" && !wallet.includes("<path"), "a blank icon exports no guide path")
 
 if (failures.length > 0) {
   throw new Error(failures.join("\n"))
