@@ -24,18 +24,18 @@ export async function exportSet(set: IconSet, kind: ExportKind): Promise<Downloa
   }))
   switch (kind) {
     case "svg-zip":
-      return zipFiles("iconhand-svg.zip", marks.map((item) => ({
+      return zipFiles("iconoodle-svg.zip", marks.map((item) => ({
         name: `${item.name}.svg`,
         body: svgDocument(item.mark),
       })))
     case "sprite":
-      return textFile("iconhand.svg", spriteDocument(marks), "image/svg+xml")
+      return textFile("iconoodle.svg", spriteDocument(marks), "image/svg+xml")
     case "react-zip":
-      return zipFiles("iconhand-react.zip", reactFiles(marks))
+      return zipFiles("iconoodle-react.zip", reactFiles(marks))
     case "variants":
-      return zipFiles("iconhand-variants.zip", variantFiles(set))
+      return zipFiles("iconoodle-variants.zip", variantFiles(set))
     case "sheet":
-      return textFile("iconhand-sheet.svg", sheetDocument(marks), "image/svg+xml")
+      return textFile("iconoodle-sheet.svg", sheetDocument(marks), "image/svg+xml")
     default: {
       const never: never = kind
       throw new Error(`Unknown export ${JSON.stringify(never)}`)

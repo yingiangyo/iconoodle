@@ -7,7 +7,7 @@ export function Gallery({ set, onClose }: { set: IconSet; onClose: () => void })
     <div className="gallery">
       <header className="gallery-head">
         <div>
-          <p>iconhand</p>
+          <p>iconoodle</p>
           <h1>A hand-drawn set</h1>
           <span>
             {drawn} of {set.icons.length} drawn

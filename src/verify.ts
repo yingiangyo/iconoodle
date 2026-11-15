@@ -15,6 +15,7 @@ import {
 } from "./document.ts"
 import { exportSet, iconSvg } from "./export.ts"
 import { setFromHash, shareHash } from "./share.ts"
+import { guideConcept, themeSlots } from "./glyphs.ts"
 import { guideKey } from "./guides.ts"
 import { THEMES } from "./themes.ts"
 
@@ -39,6 +40,8 @@ check(starter.document.icons.length === 24, "starter has 24 icons")
 check(starter.document.icons[0].name === "home", "first starter name is home")
 check(starter.document.icons[23].name === "pause", "last starter name is pause")
 check(starter.document.weight === 2, "starter weight is 2")
+check(starter.document.library === "lucide", "starter traces Lucide")
+check(starter.document.icons[0].concept === "home", "starter keeps the home concept")
 check(starter.past.length === 0, "starter has no history")
 
 const home = starter.document.selectedId
@@ -97,7 +100,7 @@ const dotMark = compileIcon(dot.session.document, home, null)
 check(dotMark.d.startsWith("M") && dotMark.d.includes("L"), "a dot is a zero-length segment")
 
 saveSet(memory, drawn.session.document)
-check(memory.values.has(STORAGE_KEY), "save uses the iconhand key")
+check(memory.values.has(STORAGE_KEY), "save uses the iconoodle key")
 const loaded = loadSet(memory)
 check(loaded !== null && loaded.icons[0].strokes.length === 1, "load restores the stroke")
 check(loaded !== null && loaded.weight === drawn.session.document.weight, "load restores the weight")
@@ -107,7 +110,7 @@ memory.setItem(STORAGE_KEY, JSON.stringify({ version: 2 }))
 check(loadSet(memory) === null, "a future version is refused")
 
 const files = await exportSet(drawn.session.document, "svg-zip")
-check(files.filename === "iconhand-svg.zip", "svg zip name")
+check(files.filename === "iconoodle-svg.zip", "svg zip name")
 const svgZip = await JSZip.loadAsync(await files.blob.arrayBuffer())
 const homeSvg = await svgZip.file("home.svg")?.async("string")
 check(typeof homeSvg === "string", "home.svg is in the zip")
@@ -118,7 +121,7 @@ check(homeSvg?.includes(`d="${plain.d}"`) === true, "svg path matches compileIco
 
 const sprite = await exportSet(drawn.session.document, "sprite")
 const spriteText = await sprite.blob.text()
-check(sprite.filename === "iconhand.svg", "sprite filename")
+check(sprite.filename === "iconoodle.svg", "sprite filename")
 check(spriteText.includes("<symbol") && spriteText.includes("<use "), "sprite has symbol and use")
 check(spriteText.includes('id="home"') && spriteText.includes('href="#home"'), "sprite ids match names")
 
@@ -153,6 +156,16 @@ for (const theme of THEMES) {
 
 const general = THEMES.find((theme) => theme.id === "general")
 check(general?.names.join() === names.join(), "general is the starter")
+if (general) {
+  const hero = themeSlots(general.names, "heroicons")
+  const search = hero.find((slot) => slot.concept === "search")
+  check(search?.name === "magnifying-glass", "heroicons names search magnifying-glass")
+  const heroSet = createSet(hero, "heroicons")
+  check(heroSet.library === "heroicons", "a new set keeps the chosen library")
+  const switched = edit(openSession(heroSet), { kind: "library", library: "phosphor" }).session.document
+  check(switched.library === "phosphor" && switched.icons[0].name === hero[0].name, "switching library keeps the names")
+  check(guideConcept("phosphor", "home", "house") === "home", "a phosphor guide still resolves home")
+}
 
 const blank = await exportSet(createSet(["wallet"]), "svg-zip")
 const blankZip = await JSZip.loadAsync(await blank.blob.arrayBuffer())
@@ -168,6 +181,12 @@ if (savedRaw) {
 }
 const legacy = loadSet(memory)
 check(legacy?.cleanup.straight === false && legacy.cleanup.circle === false && legacy.cleanup.close === false, "old saves default cleanup off")
+check(legacy?.library === "lucide", "old saves default to Lucide")
+const legacyRaw = memory.getItem(STORAGE_KEY)
+memory.values.delete(STORAGE_KEY)
+if (legacyRaw) memory.setItem("iconhand", legacyRaw)
+check(loadSet(memory)?.icons[0]?.strokes.length === 1, "an iconhand save still loads")
+if (legacyRaw) memory.setItem(STORAGE_KEY, legacyRaw)
 
 const wobble = edit(starter, {
   kind: "commit",
@@ -233,7 +252,7 @@ check(byName.get("edge")?.some((drift) => drift.kind === "padding" && drift.tigh
 check(byName.get("dense")?.some((drift) => drift.kind === "weight" && drift.heavy) === true, "a dense icon is flagged for weight")
 
 const variants = await exportSet(drawn.session.document, "variants")
-check(variants.filename === "iconhand-variants.zip", "variants zip name")
+check(variants.filename === "iconoodle-variants.zip", "variants zip name")
 const variantZip = await JSZip.loadAsync(await variants.blob.arrayBuffer())
 const squareSvg = await variantZip.file("square/2.5/home.svg")?.async("string")
 const buttSvg = await variantZip.file("butt/1.5/home.svg")?.async("string")
@@ -247,7 +266,7 @@ check(roundSvg?.includes('stroke-linecap="round"') === true, "round cap is expor
 
 const sheet = await exportSet(drawn.session.document, "sheet")
 const sheetText = await sheet.blob.text()
-check(sheet.filename === "iconhand-sheet.svg", "sheet filename")
+check(sheet.filename === "iconoodle-sheet.svg", "sheet filename")
 check(sheetText.includes('<g id="home"') && sheetText.includes('<g id="search"'), "sheet groups are named")
 check(sheetText.includes("translate("), "sheet places each icon")
 check(iconSvg(drawn.session.document, home).includes('viewBox="0 0 24 24"'), "clipboard svg is a 24 icon")

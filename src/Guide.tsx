@@ -1,5 +1,5 @@
-import { lazy, Suspense, type ComponentType, type LazyExoticComponent } from "react"
-import { guideKey } from "./guides.ts"
+import { Suspense, type ComponentType, type LazyExoticComponent } from "react"
+import type { LibraryId } from "./libraries.ts"
 
 type Icon = ComponentType<{
   size?: number | string
@@ -7,124 +7,36 @@ type Icon = ComponentType<{
   "aria-hidden"?: boolean
 }>
 
-// Each import() is its own chunk. The entry bundle keeps the map, not the glyphs.
-const icons: Record<string, LazyExoticComponent<Icon>> = {
-  "home": lazy(() => import("lucide-react/icons/house")),
-  "search": lazy(() => import("lucide-react/icons/search")),
-  "user": lazy(() => import("lucide-react/icons/user")),
-  "settings": lazy(() => import("lucide-react/icons/settings")),
-  "heart": lazy(() => import("lucide-react/icons/heart")),
-  "star": lazy(() => import("lucide-react/icons/star")),
-  "plus": lazy(() => import("lucide-react/icons/plus")),
-  "x": lazy(() => import("lucide-react/icons/x")),
-  "check": lazy(() => import("lucide-react/icons/check")),
-  "arrow-left": lazy(() => import("lucide-react/icons/arrow-left")),
-  "arrow-right": lazy(() => import("lucide-react/icons/arrow-right")),
-  "menu": lazy(() => import("lucide-react/icons/menu")),
-  "bell": lazy(() => import("lucide-react/icons/bell")),
-  "mail": lazy(() => import("lucide-react/icons/mail")),
-  "calendar": lazy(() => import("lucide-react/icons/calendar")),
-  "camera": lazy(() => import("lucide-react/icons/camera")),
-  "trash": lazy(() => import("lucide-react/icons/trash")),
-  "pencil": lazy(() => import("lucide-react/icons/pencil")),
-  "share": lazy(() => import("lucide-react/icons/share")),
-  "download": lazy(() => import("lucide-react/icons/download")),
-  "upload": lazy(() => import("lucide-react/icons/upload")),
-  "lock": lazy(() => import("lucide-react/icons/lock")),
-  "play": lazy(() => import("lucide-react/icons/play")),
-  "pause": lazy(() => import("lucide-react/icons/pause")),
-  "wallet": lazy(() => import("lucide-react/icons/wallet")),
-  "credit-card": lazy(() => import("lucide-react/icons/credit-card")),
-  "banknote": lazy(() => import("lucide-react/icons/banknote")),
-  "landmark": lazy(() => import("lucide-react/icons/landmark")),
-  "piggy-bank": lazy(() => import("lucide-react/icons/piggy-bank")),
-  "receipt": lazy(() => import("lucide-react/icons/receipt")),
-  "chart-line": lazy(() => import("lucide-react/icons/chart-line")),
-  "trending-up": lazy(() => import("lucide-react/icons/trending-up")),
-  "calculator": lazy(() => import("lucide-react/icons/calculator")),
-  "coins": lazy(() => import("lucide-react/icons/coins")),
-  "badge-percent": lazy(() => import("lucide-react/icons/badge-percent")),
-  "shield": lazy(() => import("lucide-react/icons/shield")),
-  "send": lazy(() => import("lucide-react/icons/send")),
-  "arrow-left-right": lazy(() => import("lucide-react/icons/arrow-left-right")),
-  "file-text": lazy(() => import("lucide-react/icons/file-text")),
-  "dumbbell": lazy(() => import("lucide-react/icons/dumbbell")),
-  "activity": lazy(() => import("lucide-react/icons/activity")),
-  "heart-pulse": lazy(() => import("lucide-react/icons/heart-pulse")),
-  "timer": lazy(() => import("lucide-react/icons/timer")),
-  "flame": lazy(() => import("lucide-react/icons/flame")),
-  "bike": lazy(() => import("lucide-react/icons/bike")),
-  "footprints": lazy(() => import("lucide-react/icons/footprints")),
-  "trophy": lazy(() => import("lucide-react/icons/trophy")),
-  "target": lazy(() => import("lucide-react/icons/target")),
-  "apple": lazy(() => import("lucide-react/icons/apple")),
-  "droplets": lazy(() => import("lucide-react/icons/droplets")),
-  "stretch-horizontal": lazy(() => import("lucide-react/icons/stretch-horizontal")),
-  "shopping-bag": lazy(() => import("lucide-react/icons/shopping-bag")),
-  "shopping-cart": lazy(() => import("lucide-react/icons/shopping-cart")),
-  "tag": lazy(() => import("lucide-react/icons/tag")),
-  "store": lazy(() => import("lucide-react/icons/store")),
-  "package": lazy(() => import("lucide-react/icons/package")),
-  "truck": lazy(() => import("lucide-react/icons/truck")),
-  "gift": lazy(() => import("lucide-react/icons/gift")),
-  "percent": lazy(() => import("lucide-react/icons/percent")),
-  "barcode": lazy(() => import("lucide-react/icons/barcode")),
-  "box": lazy(() => import("lucide-react/icons/box")),
-  "undo-2": lazy(() => import("lucide-react/icons/undo-2")),
-  "message-circle": lazy(() => import("lucide-react/icons/message-circle")),
-  "user-plus": lazy(() => import("lucide-react/icons/user-plus")),
-  "users": lazy(() => import("lucide-react/icons/users")),
-  "share-2": lazy(() => import("lucide-react/icons/share-2")),
-  "image": lazy(() => import("lucide-react/icons/image")),
-  "at-sign": lazy(() => import("lucide-react/icons/at-sign")),
-  "hash": lazy(() => import("lucide-react/icons/hash")),
-  "bookmark": lazy(() => import("lucide-react/icons/bookmark")),
-  "smile": lazy(() => import("lucide-react/icons/face-slightly-smiling")),
-  "repeat": lazy(() => import("lucide-react/icons/repeat")),
-  "clock": lazy(() => import("lucide-react/icons/clock")),
-  "list": lazy(() => import("lucide-react/icons/list")),
-  "kanban": lazy(() => import("lucide-react/icons/kanban")),
-  "folder": lazy(() => import("lucide-react/icons/folder")),
-  "file": lazy(() => import("lucide-react/icons/file")),
-  "inbox": lazy(() => import("lucide-react/icons/inbox")),
-  "alarm-clock": lazy(() => import("lucide-react/icons/alarm-clock")),
-  "sticky-note": lazy(() => import("lucide-react/icons/sticky-note")),
-  "flag": lazy(() => import("lucide-react/icons/flag")),
-  "plane": lazy(() => import("lucide-react/icons/plane")),
-  "map": lazy(() => import("lucide-react/icons/map")),
-  "map-pin": lazy(() => import("lucide-react/icons/map-pin")),
-  "luggage": lazy(() => import("lucide-react/icons/luggage")),
-  "compass": lazy(() => import("lucide-react/icons/compass")),
-  "train-front": lazy(() => import("lucide-react/icons/train-front")),
-  "car": lazy(() => import("lucide-react/icons/car")),
-  "hotel": lazy(() => import("lucide-react/icons/hotel")),
-  "ticket": lazy(() => import("lucide-react/icons/ticket")),
-  "sun": lazy(() => import("lucide-react/icons/sun")),
-  "cloud": lazy(() => import("lucide-react/icons/cloud")),
-  "navigation": lazy(() => import("lucide-react/icons/navigation")),
-  "globe": lazy(() => import("lucide-react/icons/globe")),
-  "bed": lazy(() => import("lucide-react/icons/bed")),
-  "utensils": lazy(() => import("lucide-react/icons/utensils")),
-  "coffee": lazy(() => import("lucide-react/icons/coffee")),
-  "pizza": lazy(() => import("lucide-react/icons/pizza")),
-  "wine": lazy(() => import("lucide-react/icons/wine")),
-  "ice-cream-cone": lazy(() => import("lucide-react/icons/ice-cream-cone")),
-  "chef-hat": lazy(() => import("lucide-react/icons/chef-hat")),
-  "salad": lazy(() => import("lucide-react/icons/salad")),
-  "shopping-basket": lazy(() => import("lucide-react/icons/shopping-basket")),
-  "pill": lazy(() => import("lucide-react/icons/pill")),
-  "stethoscope": lazy(() => import("lucide-react/icons/stethoscope")),
-  "thermometer": lazy(() => import("lucide-react/icons/thermometer")),
-  "bandage": lazy(() => import("lucide-react/icons/bandage")),
-  "syringe": lazy(() => import("lucide-react/icons/syringe")),
-  "brain": lazy(() => import("lucide-react/icons/brain")),
-  "eye": lazy(() => import("lucide-react/icons/eye")),
+type GlyphMap = Record<string, LazyExoticComponent<Icon>>
+
+const loaders: Record<LibraryId, () => Promise<{ glyphs: GlyphMap }>> = {
+  lucide: () => import("./packs/lucide.tsx"),
+  heroicons: () => import("./packs/hero.tsx"),
+  phosphor: () => import("./packs/phosphor.tsx"),
+  tabler: () => import("./packs/tabler.tsx"),
+  material: () => import("./packs/material.tsx"),
 }
 
-export function Guide({ name }: { name: string }) {
-  const key = guideKey(name)
-  if (!key) return null
-  const Icon = icons[key]
+const packs = new Map<LibraryId, GlyphMap>()
+const pending = new Map<LibraryId, Promise<GlyphMap>>()
+
+function readPack(library: LibraryId): GlyphMap {
+  const ready = packs.get(library)
+  if (ready) return ready
+  let request = pending.get(library)
+  if (!request) {
+    request = loaders[library]().then((mod) => {
+      packs.set(library, mod.glyphs)
+      return mod.glyphs
+    })
+    pending.set(library, request)
+  }
+  throw request
+}
+
+export function Guide({ library, concept }: { library: LibraryId; concept: string }) {
+  const glyphs = readPack(library)
+  const Icon = glyphs[concept]
   if (!Icon) return null
   return (
     <Suspense fallback={null}>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react"
+import { Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react"
 import { checkSet, driftLabel, type Drift } from "./check.ts"
 import { compileIcon, type Mark } from "./compile.ts"
 import {
@@ -13,6 +13,7 @@ import {
   type Cleanup,
   type Command,
   type EditResult,
+  type Icon,
   type IconId,
   type Sample,
   type Session,
@@ -21,7 +22,9 @@ import {
 import { EXPORT_KINDS, exportSet, iconSvg, type ExportKind } from "./export.ts"
 import { Gallery } from "./Gallery.tsx"
 import { Guide } from "./Guide.tsx"
-import { GUIDE_KEY, guideKey } from "./guides.ts"
+import { guideConcept, themeSlots } from "./glyphs.ts"
+import { GUIDE_KEY, readGuide } from "./guides.ts"
+import { LIBRARIES, libraryInfo, type LibraryId } from "./libraries.ts"
 import { Mockup } from "./Mockup.tsx"
 import { setFromHash, shareHash } from "./share.ts"
 import { THEMES, type ThemePack } from "./themes.ts"
@@ -41,7 +44,9 @@ export default function App() {
     return saved ? openSession(saved) : null
   })
   const [picking, setPicking] = useState(() => loadSet(localStorage) === null)
-  const [guide, setGuide] = useState(() => localStorage.getItem(GUIDE_KEY) !== "0")
+  const [view, setView] = useState<"draw" | "set">("draw")
+  const [libraryChoice, setLibraryChoice] = useState<LibraryId>("lucide")
+  const [guide, setGuide] = useState(() => readGuide(localStorage))
   const [live, setLive] = useState<Stroke | null>(null)
   const [nameDraft, setNameDraft] = useState<string | null>(null)
   const [addDraft, setAddDraft] = useState("")
@@ -51,11 +56,14 @@ export default function App() {
   const [gallery, setGallery] = useState(() => setFromHash(location.hash))
   const sessionRef = useRef(session)
   const pickingRef = useRef(picking)
+  const viewRef = useRef(view)
+  const stepRef = useRef<(delta: number) => void>(() => {})
   const liveRef = useRef<Stroke | null>(null)
   const pointerRef = useRef<number | null>(null)
   const slotRefs = useRef(new Map<string, HTMLButtonElement>())
   sessionRef.current = session
   pickingRef.current = picking
+  viewRef.current = view
 
   const selected = session
     ? (session.document.icons.find((icon) => icon.id === session.document.selectedId) ??
@@ -102,6 +110,16 @@ export default function App() {
         return
       }
       if (!sessionRef.current || pickingRef.current) return
+      if (viewRef.current === "draw" && (event.key === "ArrowRight" || event.key === "Enter")) {
+        event.preventDefault()
+        stepRef.current(1)
+        return
+      }
+      if (viewRef.current === "draw" && event.key === "ArrowLeft") {
+        event.preventDefault()
+        stepRef.current(-1)
+        return
+      }
       const key = event.key.toLowerCase()
       const modKey = event.metaKey || event.ctrlKey
       if (modKey && key === "z" && event.shiftKey) {
@@ -187,8 +205,10 @@ export default function App() {
     })
   }
 
-  function startTheme(theme: ThemePack) {
-    const next = openSession(createSet(theme.names))
+  function startTheme(theme: ThemePack, library: LibraryId) {
+    const slots = themeSlots(theme.names, library)
+    if (slots.length === 0) return
+    const next = openSession(createSet(slots, library))
     sessionRef.current = next
     liveRef.current = null
     pointerRef.current = null
@@ -199,6 +219,7 @@ export default function App() {
     setExportError("")
     saveSet(localStorage, next.document)
     setSession(next)
+    setView("draw")
     setPicking(false)
   }
 
@@ -232,6 +253,18 @@ export default function App() {
     setLive(null)
     if (!current) return
     apply({ kind: "clear", id: current.document.selectedId })
+  }
+
+  stepRef.current = (delta: number) => {
+    const current = sessionRef.current
+    if (!current) return
+    const icons = current.document.icons
+    const index = icons.findIndex((icon) => icon.id === current.document.selectedId)
+    const target = icons[index + delta]
+    if (!target) return
+    commitLive()
+    setNote("")
+    apply({ kind: "select", id: target.id })
   }
 
   function commitName() {
@@ -371,38 +404,172 @@ export default function App() {
           <div className="brand">
             <Logo />
             <div>
-              <h1>iconhand</h1>
+              <h1>iconoodle</h1>
               <p>Hand-drawn icons.</p>
             </div>
           </div>
           {session ? (
             <button type="button" className="toggle" onClick={() => setPicking(false)}>
-              Back to the set
+              Back to drawing
             </button>
           ) : null}
         </header>
-        <ThemePicker replacing={session !== null} drawn={drawn} onPick={startTheme} />
-        <Colophon />
+        <Suspense fallback={<p className="note">Loading guides.</p>}>
+          <ThemePicker
+            replacing={session !== null}
+            drawn={drawn}
+            library={libraryChoice}
+            onLibrary={setLibraryChoice}
+            onPick={startTheme}
+          />
+        </Suspense>
+        <Colophon library={libraryChoice} />
       </div>
     )
   }
 
-  const selectedMark = marks[session.document.icons.findIndex((icon) => icon.id === selected.id)] ?? marks[0]
+  const selectedIndex = session.document.icons.findIndex((icon) => icon.id === selected.id)
+  const selectedMark = marks[selectedIndex] ?? marks[0]
+  const previous = selectedIndex > 0 ? session.document.icons[selectedIndex - 1] : null
+  const upcoming = session.document.icons[selectedIndex + 1] ?? null
   const canUndo = live !== null || session.past.length > 0
   const canRedo = live === null && session.future.length > 0
   const canClear = live !== null || selected.strokes.length > 0
   const selectedFlags = flags.get(selected.id) ?? []
+  const selectedGuide = guideConcept(session.document.library, selected.concept, selected.name)
+
+  if (view === "draw") {
+    return (
+      <div className="app">
+        <header className="top">
+          <div className="brand">
+            <Logo />
+            <div>
+              <h1>iconoodle</h1>
+              <p className="progress">
+                {selectedIndex + 1} of {session.document.icons.length}
+              </p>
+            </div>
+          </div>
+          <button type="button" className="toggle" onClick={() => setView("set")}>
+            Set
+          </button>
+        </header>
+        <Suspense fallback={null}>
+        <main className="draw">
+          <div className="draw-stage">
+            <Peek
+              icon={previous}
+              mark={previous ? marks[selectedIndex - 1] : null}
+              library={session.document.library}
+              guide={guide}
+              onChoose={previous ? () => choose(previous.id) : undefined}
+            />
+            <div className="stage-card">
+              <label className="name-field">
+                <span>Name</span>
+                <input
+                  value={nameValue}
+                  onChange={(event) => setNameDraft(event.target.value)}
+                  onBlur={commitName}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault()
+                      event.currentTarget.blur()
+                    }
+                  }}
+                  spellCheck={false}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  aria-label="Icon name"
+                />
+              </label>
+              <div className="canvas-frame">
+                <div className="canvas-stack">
+                  {guide && selectedGuide ? (
+                    <div className="trace" aria-hidden="true">
+                      <Guide library={session.document.library} concept={selectedGuide} />
+                    </div>
+                  ) : null}
+                  <svg
+                    className="canvas"
+                    viewBox={`0 0 ${ARTBOARD} ${ARTBOARD}`}
+                    role="application"
+                    aria-label={`Drawing surface for ${selected.name}`}
+                    onPointerDown={onPointerDown}
+                    onPointerMove={onPointerMove}
+                    onPointerUp={onPointerUp}
+                    onPointerCancel={onPointerUp}
+                    onContextMenu={(event) => event.preventDefault()}
+                  >
+                    <Grid />
+                    <Keyline />
+                    {selectedMark?.d ? (
+                      <path
+                        d={selectedMark.d}
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={selectedMark.strokeWidth}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    ) : null}
+                    {!selectedMark?.d && !(guide && selectedGuide) ? (
+                      <text x="12" y="13" textAnchor="middle" className="canvas-hint">
+                        Draw
+                      </text>
+                    ) : null}
+                  </svg>
+                </div>
+              </div>
+              {selectedFlags.length > 0 ? (
+                <p className="stage-flag">{selectedFlags.map(driftLabel).join(" · ")}</p>
+              ) : null}
+              {note ? <p className="note">{note}</p> : null}
+            </div>
+            <Peek
+              icon={upcoming}
+              mark={upcoming ? marks[selectedIndex + 1] : null}
+              library={session.document.library}
+              guide={guide}
+              onChoose={upcoming ? () => choose(upcoming.id) : undefined}
+            />
+          </div>
+          <div className="draw-actions">
+            <button type="button" onClick={() => stepRef.current(-1)} disabled={!previous}>
+              Back
+            </button>
+            <button type="button" onClick={undo} disabled={!canUndo}>
+              Undo
+            </button>
+            <button type="button" onClick={clearIcon} disabled={!canClear}>
+              Clear
+            </button>
+            <button type="button" className="next" onClick={() => stepRef.current(1)} disabled={!upcoming}>
+              {upcoming ? `Next ${upcoming.name}` : "Last icon"}
+            </button>
+          </div>
+        </main>
+        </Suspense>
+      </div>
+    )
+  }
 
   return (
-    <div className="app">
+    <div className="app set-panel">
       <header className="top">
         <div className="brand">
           <Logo />
           <div>
-            <h1>iconhand</h1>
-            <p>Hand-drawn icons.</p>
+            <h1>iconoodle</h1>
+            <p>
+              {selectedIndex + 1} of {session.document.icons.length}
+            </p>
           </div>
         </div>
+        <button type="button" className="next" onClick={() => setView("draw")}>
+          Back to drawing
+        </button>
         <div className="controls">
           <div className="control">
             <span className="control-label">Weight</span>
@@ -450,6 +617,7 @@ export default function App() {
         </div>
       </header>
 
+      <Suspense fallback={null}>
       <div className="desk">
         <aside className="library">
           <div className="library-head">
@@ -471,15 +639,18 @@ export default function App() {
                 onClick={() => choose(icon.id)}
               >
                 <span className="slot-preview">
-                  {guide && icon.strokes.length === 0 && guideKey(icon.name) ? (
+                  {guide && icon.strokes.length === 0 && guideConcept(session.document.library, icon.concept, icon.name) ? (
                     <span className="slot-guide">
-                      <Guide name={icon.name} />
+                      <Guide
+                        library={session.document.library}
+                        concept={guideConcept(session.document.library, icon.concept, icon.name) ?? icon.concept}
+                      />
                     </span>
                   ) : null}
                   <MarkView
                     mark={marks[index]}
                     size={36}
-                    placeholder={!(guide && icon.strokes.length === 0 && guideKey(icon.name))}
+                    placeholder={!(guide && icon.strokes.length === 0 && guideConcept(session.document.library, icon.concept, icon.name))}
                   />
                 </span>
                 <span className="slot-name">{icon.name}</span>
@@ -504,11 +675,28 @@ export default function App() {
             />
             <button type="submit">Add</button>
           </form>
+          <div className="library-switch">
+            <span className="control-label">Tracing library</span>
+            <div className="segment" role="group" aria-label="Tracing library">
+              {LIBRARIES.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-pressed={session.document.library === item.id}
+                  onClick={() => apply({ kind: "library", library: item.id })}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            <p>Names stay. Only the tracing picture changes.</p>
+          </div>
           <button
             type="button"
             className="new-set"
             onClick={() => {
               commitLive()
+              setLibraryChoice(session.document.library)
               setPicking(true)
             }}
           >
@@ -535,9 +723,9 @@ export default function App() {
             </label>
             <div className="canvas-frame">
               <div className="canvas-stack">
-              {guide && guideKey(selected.name) ? (
+              {guide && selectedGuide ? (
                 <div className="trace" aria-hidden="true">
-                  <Guide name={selected.name} />
+                  <Guide library={session.document.library} concept={selectedGuide} />
                 </div>
               ) : null}
               <svg
@@ -563,7 +751,7 @@ export default function App() {
                     strokeLinejoin="round"
                   />
                 ) : null}
-                {!selectedMark?.d && !(guide && guideKey(selected.name)) ? (
+                {!selectedMark?.d && !(guide && selectedGuide) ? (
                   <text x="12" y="13" textAnchor="middle" className="canvas-hint">
                     Draw
                   </text>
@@ -633,6 +821,7 @@ export default function App() {
           </div>
         </section>
       </div>
+      </Suspense>
 
       <section className="preview" aria-label="Preview">
         <div className="preview-head">
@@ -645,7 +834,7 @@ export default function App() {
         </div>
       </section>
       <Mockup marks={marks} />
-      <Colophon />
+      <Colophon library={session.document.library} />
     </div>
   )
 }
@@ -653,19 +842,42 @@ export default function App() {
 function ThemePicker({
   replacing,
   drawn,
+  library,
+  onLibrary,
   onPick,
 }: {
   replacing: boolean
   drawn: number
-  onPick: (theme: ThemePack) => void
+  library: LibraryId
+  onLibrary: (library: LibraryId) => void
+  onPick: (theme: ThemePack, library: LibraryId) => void
 }) {
+  const info = libraryInfo(library)
   return (
     <main className="picker">
       <div className="picker-copy">
         <h2>{replacing ? "New set" : "Start a set"}</h2>
         <p>
-          Pick the kind of product. The slots arrive named, and each one can show a faint Lucide outline to trace.
-          The outline stays in the editor.
+          Choose a tracing library, then the kind of product. Slots arrive named for that library, with a faint outline to trace. The outline stays in the editor.
+        </p>
+        <div className="segment library-pick" role="group" aria-label="Tracing library">
+          {LIBRARIES.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              aria-pressed={library === item.id}
+              onClick={() => onLibrary(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <p className="picker-license">
+          {info.label} is © {info.holder},{" "}
+          <a href={info.licenseUrl} target="_blank" rel="noreferrer">
+            {info.license}
+          </a>
+          .
         </p>
         {replacing && drawn > 0 ? (
           <p className="picker-warn">
@@ -674,38 +886,78 @@ function ThemePicker({
         ) : null}
       </div>
       <div className="themes">
-        {THEMES.map((theme) => (
-          <button key={theme.id} type="button" className="theme" onClick={() => onPick(theme)}>
-            <span className="theme-marks" aria-hidden="true">
-              {theme.names.slice(0, 4).map((name) => (
-                <span key={name}>
-                  <Guide name={name} />
-                </span>
-              ))}
-            </span>
-            <span className="theme-label">{theme.label}</span>
-            <span className="theme-blurb">{theme.blurb}</span>
-            <span className="theme-names">{theme.names.length} icons</span>
-          </button>
-        ))}
+        {THEMES.map((theme) => {
+          const slots = themeSlots(theme.names, library)
+          return (
+            <button
+              key={theme.id}
+              type="button"
+              className="theme"
+              disabled={slots.length === 0}
+              onClick={() => onPick(theme, library)}
+            >
+              <span className="theme-marks" aria-hidden="true">
+                {slots.slice(0, 4).map((slot) => (
+                  <span key={slot.concept}>
+                    <Guide library={library} concept={slot.concept} />
+                  </span>
+                ))}
+              </span>
+              <span className="theme-label">{theme.label}</span>
+              <span className="theme-blurb">{theme.blurb}</span>
+              <span className="theme-names">{slots.length} icons</span>
+            </button>
+          )
+        })}
       </div>
     </main>
   )
 }
 
-function Colophon() {
+function Colophon({ library }: { library: LibraryId }) {
+  const info = libraryInfo(library)
   return (
     <footer className="colophon">
       Tracing guides are{" "}
-      <a href="https://lucide.dev" target="_blank" rel="noreferrer">
-        Lucide
+      <a href={info.url} target="_blank" rel="noreferrer">
+        {info.label}
       </a>{" "}
-      icons, © Lucide Contributors,{" "}
-      <a href="https://github.com/lucide-icons/lucide/blob/main/LICENSE" target="_blank" rel="noreferrer">
-        ISC license
+      icons, © {info.holder},{" "}
+      <a href={info.licenseUrl} target="_blank" rel="noreferrer">
+        {info.license} license
       </a>
       . They are not included in exports.
     </footer>
+  )
+}
+
+function Peek({
+  icon,
+  mark,
+  library,
+  guide,
+  onChoose,
+}: {
+  icon: Icon | null
+  mark: Mark | null
+  library: LibraryId
+  guide: boolean
+  onChoose?: () => void
+}) {
+  if (!icon || !mark) return <span className="peek is-empty" />
+  const concept = guideConcept(library, icon.concept, icon.name)
+  return (
+    <button type="button" className="peek" onClick={onChoose}>
+      <span className="peek-mark">
+        {guide && icon.strokes.length === 0 && concept ? (
+          <span className="slot-guide">
+            <Guide library={library} concept={concept} />
+          </span>
+        ) : null}
+        <MarkView mark={mark} size={56} placeholder={!concept} />
+      </span>
+      <span>{icon.name}</span>
+    </button>
   )
 }
 

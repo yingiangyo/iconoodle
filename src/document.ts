@@ -1,3 +1,5 @@
+import { themeSlots } from "./glyphs.ts"
+import { isLibraryId, type LibraryId } from "./libraries.ts"
 import { THEMES } from "./themes.ts"
 
 export const ARTBOARD = 24
@@ -23,6 +25,7 @@ export type Stroke = {
 export type Icon = {
   readonly id: IconId
   readonly name: IconName
+  readonly concept: string
   readonly strokes: readonly Stroke[]
 }
 
@@ -35,6 +38,7 @@ export type Cleanup = {
 export const CLEANUP_OFF: Cleanup = { straight: false, circle: false, close: false }
 
 export type IconSet = {
+  readonly library: LibraryId
   readonly weight: Weight
   readonly snap: boolean
   readonly cleanup: Cleanup
@@ -68,12 +72,14 @@ export type Command =
   | { readonly kind: "weight"; readonly weight: Weight }
   | { readonly kind: "snap"; readonly snap: boolean }
   | { readonly kind: "cleanup"; readonly cleanup: Cleanup }
+  | { readonly kind: "library"; readonly library: LibraryId }
   | { readonly kind: "commit"; readonly id: IconId; readonly stroke: Stroke }
   | { readonly kind: "clear"; readonly id: IconId }
   | { readonly kind: "undo" }
   | { readonly kind: "redo" }
 
-export const STORAGE_KEY = "iconhand"
+export const STORAGE_KEY = "iconoodle"
+const LEGACY_KEY = "iconhand"
 const HISTORY_LIMIT = 100
 const NAME_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 
@@ -90,7 +96,7 @@ export function isWeight(value: unknown): value is Weight {
 }
 
 export function loadSet(storage: Pick<Storage, "getItem">): IconSet | null {
-  const raw = storage.getItem(STORAGE_KEY)
+  const raw = storage.getItem(STORAGE_KEY) ?? storage.getItem(LEGACY_KEY)
   if (raw === null) return null
   try {
     return parseSet(JSON.parse(raw))
@@ -135,6 +141,8 @@ export function edit(session: Session, command: Command): EditResult {
       return setSnap(session, command.snap)
     case "cleanup":
       return setCleanup(session, command.cleanup)
+    case "library":
+      return setLibrary(session, command.library)
     case "commit":
       return commit(session, command.id, command.stroke)
     case "clear":
@@ -150,17 +158,25 @@ export function edit(session: Session, command: Command): EditResult {
   }
 }
 
-export function createSet(names: readonly string[]): IconSet {
+export function createSet(
+  seeds: readonly (string | { readonly name: string; readonly concept: string })[],
+  library: LibraryId = "lucide",
+): IconSet {
   const icons: Icon[] = []
   const seen = new Set<string>()
-  for (const name of names) {
-    if (!isIconName(name) || seen.has(name)) throw new Error(`Icon name is not a unique slug: ${name}`)
+  for (const seed of seeds) {
+    const name = typeof seed === "string" ? seed : seed.name
+    const concept = typeof seed === "string" ? seed : seed.concept
+    if (!isIconName(name) || seen.has(name) || concept.length === 0) {
+      throw new Error(`Icon name is not a unique slug: ${name}`)
+    }
     seen.add(name)
-    icons.push({ id: mintId(), name, strokes: [] })
+    icons.push({ id: mintId(), name, concept, strokes: [] })
   }
   const list = nonEmpty(icons)
   if (!list) throw new Error("A set needs at least one icon")
   return {
+    library,
     weight: 2,
     snap: false,
     cleanup: CLEANUP_OFF,
@@ -172,7 +188,7 @@ export function createSet(names: readonly string[]): IconSet {
 function starterSet(): IconSet {
   const general = THEMES.find((theme) => theme.id === "general")
   if (!general) throw new Error("Missing general theme")
-  return createSet(general.names)
+  return createSet(themeSlots(general.names, "lucide"), "lucide")
 }
 
 function select(session: Session, id: IconId): EditResult {
@@ -188,7 +204,7 @@ function select(session: Session, id: IconId): EditResult {
 
 function add(session: Session): EditResult {
   const name = freeName(session.document.icons)
-  const icon: Icon = { id: mintId(), name, strokes: [] }
+  const icon: Icon = { id: mintId(), name, concept: name, strokes: [] }
   const icons = nonEmpty([...session.document.icons, icon])
   if (!icons) return same(session)
   return remember(session, {
@@ -238,6 +254,11 @@ function setCleanup(session: Session, cleanup: Cleanup): EditResult {
     return same(session)
   }
   return remember(session, { ...session.document, cleanup })
+}
+
+function setLibrary(session: Session, library: LibraryId): EditResult {
+  if (session.document.library === library) return same(session)
+  return remember(session, { ...session.document, library })
 }
 
 function commit(session: Session, id: IconId, stroke: Stroke): EditResult {
@@ -362,6 +383,7 @@ function nonEmpty(icons: readonly Icon[]): readonly [Icon, ...Icon[]] | null {
 function serialize(set: IconSet): string {
   return JSON.stringify({
     version: 1,
+    library: set.library,
     weight: set.weight,
     snap: set.snap,
     cleanup: set.cleanup,
@@ -369,6 +391,7 @@ function serialize(set: IconSet): string {
     icons: set.icons.map((icon) => ({
       id: icon.id,
       name: icon.name,
+      concept: icon.concept,
       strokes: icon.strokes.map((stroke) => ({
         samples: stroke.samples.map((sample) => ({
           x: sample.x,
@@ -400,6 +423,7 @@ function parseSet(value: unknown): IconSet | null {
   const list = nonEmpty(icons)
   if (!list || !list.some((icon) => icon.id === value.selectedId)) return null
   return {
+    library: isLibraryId(value.library) ? value.library : "lucide",
     weight: value.weight,
     snap: value.snap,
     cleanup: parseCleanup(value.cleanup),
@@ -426,7 +450,8 @@ function parseIcon(value: unknown): Icon | null {
     if (!stroke) return null
     strokes.push(stroke)
   }
-  return { id: value.id, name: value.name, strokes }
+  const concept = typeof value.concept === "string" && value.concept.length > 0 ? value.concept : value.name
+  return { id: value.id, name: value.name, concept, strokes }
 }
 
 function parseStroke(value: unknown): Stroke | null {
