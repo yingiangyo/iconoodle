@@ -31,6 +31,7 @@ import { Drawer } from "vaul"
 import "./vaul.css"
 import { Mockup } from "./Mockup.tsx"
 import { setFromHash, shareHash } from "./share.ts"
+import { SMOOTH_KEY, SMOOTH_LABELS, SMOOTH_LEVELS, readSmooth, type SmoothLevel } from "./smooth.ts"
 import { THEMES, type ThemePack } from "./themes.ts"
 
 const SIZES = [16, 20, 24, 32] as const
@@ -52,6 +53,7 @@ export default function App() {
   const [libraryChoice, setLibraryChoice] = useState<LibraryId>("lucide")
   const [guide, setGuide] = useState(() => readGuide(localStorage))
   const [hint, setHint] = useState(() => readHint(localStorage))
+  const [smoothness, setSmoothness] = useState(() => readSmooth(localStorage))
   const [live, setLive] = useState<Stroke | null>(null)
   const [nameDraft, setNameDraft] = useState<string | null>(null)
   const [addDraft, setAddDraft] = useState("")
@@ -64,6 +66,7 @@ export default function App() {
   const pickingRef = useRef(picking)
   const viewRef = useRef(view)
   const guideRef = useRef(guide)
+  const smoothRef = useRef(smoothness)
   const stepRef = useRef<(delta: number) => void>(() => {})
   const cycleRef = useRef<(delta: number) => void>(() => {})
   const cardRef = useRef<HTMLDivElement>(null)
@@ -79,6 +82,7 @@ export default function App() {
   pickingRef.current = picking
   viewRef.current = view
   guideRef.current = guide
+  smoothRef.current = smoothness
 
   const selected = session
     ? (session.document.icons.find((icon) => icon.id === session.document.selectedId) ??
@@ -192,10 +196,11 @@ export default function App() {
 
   const marks = useMemo(() => {
     if (!session || !selected) return []
+    const preview = live ? { samples: live.samples, smooth: smoothness } : null
     return session.document.icons.map((icon) =>
-      compileIcon(session.document, icon.id, icon.id === selected.id ? live : null),
+      compileIcon(session.document, icon.id, icon.id === selected.id ? preview : null),
     )
-  }, [session, selected, live])
+  }, [session, selected, live, smoothness])
 
   function apply(command: Command): EditResult | null {
     const current = sessionRef.current
@@ -217,12 +222,22 @@ export default function App() {
     pointerRef.current = null
     setLive(null)
     if (!current || !stroke || stroke.samples.length === 0) return
-    const result = apply({ kind: "commit", id: current.document.selectedId, stroke })
+    const result = apply({
+      kind: "commit",
+      id: current.document.selectedId,
+      stroke: { samples: stroke.samples, smooth: smoothRef.current },
+    })
     if (result?.rejection) setNote("That stroke had no usable points.")
     else {
       dismissHint()
       buzz(8)
     }
+  }
+
+  function setSmooth(level: SmoothLevel) {
+    smoothRef.current = level
+    localStorage.setItem(SMOOTH_KEY, String(level))
+    setSmoothness(level)
   }
 
   function dismissHint() {
@@ -718,6 +733,7 @@ export default function App() {
                 </div>
               </div>
               <div className="stage-foot">
+                <SmoothControl level={smoothness} onChange={setSmooth} />
                 {hint && selected.strokes.length === 0 ? (
                   <p className="hint">Draw this mark, then Next.</p>
                 ) : null}
@@ -1025,6 +1041,7 @@ export default function App() {
                 Copy SVG
               </button>
             </div>
+            <SmoothControl level={smoothness} onChange={setSmooth} />
             <div className="tools tidy" role="group" aria-label="Stroke cleanup">
               <button
                 type="button"
@@ -1357,6 +1374,21 @@ function appendSamples(existing: readonly Sample[], next: readonly Sample[]): Sa
   return samples
 }
 
+function SmoothControl({ level, onChange }: { level: SmoothLevel; onChange: (level: SmoothLevel) => void }) {
+  return (
+    <div className="smoothness">
+      <span className="control-label">Smoothness</span>
+      <div className="segment" role="group" aria-label={`Smoothness, ${SMOOTH_LABELS[level]}`}>
+        {SMOOTH_LEVELS.map((item) => (
+          <button key={item} type="button" aria-pressed={level === item} onClick={() => onChange(item)}>
+            {SMOOTH_LABELS[item]}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function buzz(ms: number) {
   if (typeof navigator.vibrate === "function") navigator.vibrate(ms)
 }
@@ -1368,7 +1400,7 @@ function isPalm(event: ReactPointerEvent<SVGSVGElement>): boolean {
 
 function swipeZone(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false
-  if (target.closest(".canvas, .lib-pop, input, textarea, a")) return false
+  if (target.closest(".canvas, .lib-pop, .smoothness, input, textarea, a")) return false
   return Boolean(target.closest(".draw-actions, .dock, .stage-foot"))
 }
 

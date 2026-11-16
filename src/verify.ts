@@ -10,6 +10,8 @@ import {
   loadSet,
   openSession,
   saveSet,
+  setFromJSON,
+  setToJSON,
   type Sample,
   type Stroke,
 } from "./document.ts"
@@ -17,6 +19,7 @@ import { exportSet, iconSvg } from "./export.ts"
 import { setFromHash, shareHash } from "./share.ts"
 import { guideConcept, themeSlots } from "./glyphs.ts"
 import { cycleChoice } from "./libraries.ts"
+import { SMOOTH_KEY, readSmooth, smoothTolerance } from "./smooth.ts"
 import { guideKey } from "./guides.ts"
 import { THEMES } from "./themes.ts"
 
@@ -242,6 +245,50 @@ const closed = compileIcon(
   home,
   null,
 )
+const rawSession = edit(starter, {
+  kind: "commit",
+  id: home,
+  stroke: { ...wobble.document.icons[0].strokes[0], smooth: 0 },
+}).session
+const rawLine = compileIcon(rawSession.document, home, null)
+const rawStraight = compileIcon(
+  { ...rawSession.document, cleanup: { straight: true, circle: false, close: false } },
+  home,
+  null,
+)
+check(rawStraight.d === straightened.d || /^M[\d.]+ [\d.]+L[\d.]+ [\d.]+$/.test(rawStraight.d), "straight still snaps when smoothing is off")
+check(rawLine.d.includes("L"), "smoothing off keeps the stroke")
+const rawCircle = compileIcon(
+  {
+    ...edit(starter, { kind: "commit", id: home, stroke: { ...circleStroke(12, 12, 6, 18, 0.2), smooth: 0 } }).session.document,
+    cleanup: { straight: false, circle: true, close: false },
+  },
+  home,
+  null,
+)
+check(rawCircle.d.includes("A") && rawCircle.d.endsWith("Z"), "circle still snaps when smoothing is off")
+
+const scribble = stroke(scribblePoints())
+const off = compileIcon(edit(starter, { kind: "commit", id: home, stroke: { ...scribble, smooth: 0 } }).session.document, home, null)
+const med = compileIcon(edit(starter, { kind: "commit", id: home, stroke: { samples: scribble.samples } }).session.document, home, null)
+const medStamped = compileIcon(edit(starter, { kind: "commit", id: home, stroke: { ...scribble, smooth: 2 } }).session.document, home, null)
+const high = compileIcon(edit(starter, { kind: "commit", id: home, stroke: { ...scribble, smooth: 3 } }).session.document, home, null)
+check(med.d === medStamped.d, "an old stroke matches medium smoothing")
+check(off.d.length > high.d.length, "off keeps more of a scribble than high")
+check(smoothTolerance(2) === 0.35, "medium is the previous simplify tolerance")
+check(smoothTolerance(0) === 0, "off does not simplify")
+
+const stamped = edit(starter, { kind: "commit", id: home, stroke: { ...scribble, smooth: 0 } })
+check(stamped.session.document.icons[0].strokes[0]?.smooth === 0, "a new stroke records its smoothness")
+const stampedRaw = setToJSON(stamped.session.document)
+check(stampedRaw.includes('"smooth":0'), "the stroke keeps its smoothness in the save")
+check(!stampedRaw.includes(SMOOTH_KEY), "the preference is not stored in the set")
+const stampedLoaded = setFromJSON(stampedRaw)
+check(stampedLoaded?.icons[0].strokes[0]?.smooth === 0, "a reload keeps the stroke smoothness")
+check(readSmooth(memory) === 2, "a missing preference is medium")
+memory.setItem(SMOOTH_KEY, "0")
+check(readSmooth(memory) === 0, "the preference reads back")
+
 check(closed.d.endsWith("Z"), "a near-closed shape closes")
 check((closed.d.match(/L/g)?.length ?? 0) >= 3, "the closed shape keeps its corners")
 
@@ -285,6 +332,14 @@ if (failures.length > 0) {
   throw new Error(failures.join("\n"))
 }
 console.log("verify ok")
+
+function scribblePoints(): (readonly [number, number])[] {
+  const points: (readonly [number, number])[] = []
+  for (let index = 0; index <= 48; index += 1) {
+    points.push([2 + index * 0.4, 12 + Math.sin(index * 0.7) * 1.4])
+  }
+  return points
+}
 
 function stroke(points: readonly (readonly [number, number])[]): Stroke {
   const samples: Sample[] = points.map(([x, y]) => ({ x, y, pressure: 0.5 }))

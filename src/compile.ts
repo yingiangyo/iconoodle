@@ -10,6 +10,7 @@ import {
   type Stroke,
   type Weight,
 } from "./document.ts"
+import { SMOOTH_DEFAULT, isSmoothLevel, smoothTolerance } from "./smooth.ts"
 
 export type LineCap = "butt" | "round" | "square"
 export type LineJoin = "miter" | "round" | "bevel"
@@ -30,8 +31,6 @@ export type Paint = {
   readonly lineCap?: LineCap
   readonly lineJoin?: LineJoin
 }
-
-const simplifyTolerance = 0.35
 
 export function compileIcon(set: IconSet, iconId: IconId, live: Stroke | null, paint?: Paint): Mark {
   const icon = set.icons.find((item) => item.id === iconId)
@@ -78,7 +77,9 @@ function strokeToPath(stroke: Stroke, snap: boolean, cleanup: Cleanup): string {
 }
 
 function prepare(stroke: Stroke, snap: boolean): Pt[] {
-  return simplifyPoints(dedupe(stroke.samples.map((sample) => place(sample, snap))))
+  const points = dedupe(stroke.samples.map((sample) => place(sample, snap)))
+  const level = isSmoothLevel(stroke.smooth) ? stroke.smooth : SMOOTH_DEFAULT
+  return simplifyPoints(points, smoothTolerance(level))
 }
 
 function pathFor(tidy: Tidy): string {
@@ -126,9 +127,9 @@ function dedupe(points: readonly Pt[]): Pt[] {
   return kept
 }
 
-function simplifyPoints(points: Pt[]): Pt[] {
-  if (points.length <= 2) return points
-  return simplify(points, simplifyTolerance, true)
+function simplifyPoints(points: Pt[], tolerance: number): Pt[] {
+  if (points.length <= 2 || tolerance <= 0) return points
+  return simplify(points, tolerance, true)
 }
 
 function num(value: number): string {

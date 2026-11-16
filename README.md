@@ -59,7 +59,7 @@ Pick Lucide, Heroicons, Phosphor, Tabler, or Material Symbols when you start a s
 
 ## Why a centerline
 
-The icons are open polylines with round caps and a shared `stroke-width` of 1.5, 2, or 2.5 on a 24 by 24 grid. `simplify-js` drops pen jitter before the path is built. Snap, when it is on, rounds a copy of the samples to the grid and leaves the stored hand alone.
+The icons are open polylines with round caps and a shared `stroke-width` of 1.5, 2, or 2.5 on a 24 by 24 grid. `simplify-js` drops pen jitter before the path is built. Smoothness (Off, Low, Med, High) sets that tolerance for strokes you draw from then on. Off only drops exact duplicate points. Med is the previous amount. The choice is saved in the browser, not in the set and not in a share link. Each new stroke records the level it was drawn with, so older strokes stay as they were. Snap, when it is on, rounds a copy of the samples to the grid and leaves the stored hand alone.
 
 A filled outline bakes the width into the shape. Changing the set weight would mean rebuilding every outline, and small wobbles become blobs at 16px. A centerline keeps one width for the whole set, and that width is still a stroke when the SVG scales to 16, 20, 24, or 32. `perfect-freehand` is not a dependency.
 
