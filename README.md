@@ -17,7 +17,7 @@ Design notes for later work live in `.cursor/skills/`. They are Emil Kowalski's 
 
 ## Drawing
 
-The first screen is one icon. Draw it, then Next (or Enter, or the right arrow) saves the stroke you already committed and opens the next slot. Back and the left arrow return to the previous icon. The count above the name reads like `7 of 24`. The grid, the consistency checker, the size preview, and the mockups live on Set.
+The first screen is one icon. Draw it, then Next (or Enter, or the right arrow) saves the stroke you already committed and opens the next slot. Back and the left arrow return to the previous icon. The name sits in the header, and you tap it to rename. The count under it reads like `7 of 24`. The grid, the consistency checker, the size preview, and the mockups live on Set.
 
 ## Architecture
 
@@ -35,7 +35,7 @@ The first screen is one icon. Draw it, then Next (or Enter, or the right arrow) 
 
 Straight, Circle, and Close run when a stroke is committed. They live on the set, next to snap, and they do not rewrite the stored samples. Straight collapses a wobble that stays within 0.6 units of a line. Circle replaces a stroke that already fits a circle or a wide arc. Close joins ends that are already within 1.4 units. The pen you are still drawing is left alone.
 
-Variants downloads the set nine times: round, square, and butt, at 1.5, 2, and 2.5. SVG has no square or butt join, so square uses a miter join and butt uses a bevel join. Copy SVG puts the selected icon on the clipboard. Figma sheet is one SVG with a named group per icon, spaced on a grid so the paste lands as separate layers.
+Variants downloads the set nine times: round, square, and butt, at 1.5, 2, and 2.5. SVG has no square or butt join, so square uses a miter join and butt uses a bevel join. Figma sheet is one SVG with a named group per icon, spaced on a grid so the paste lands as separate layers.
 
 Share copies a read-only link. The set is compressed with `lz-string` into the URL hash. Opening it shows a gallery and does not write over the set in this browser. There is no server.
 
@@ -55,7 +55,7 @@ Pick Lucide, Heroicons, Phosphor, Tabler, or Material Symbols when you start a s
 
 ## Why a centerline
 
-The icons are open polylines with round caps and a shared `stroke-width` of 1.5, 2, or 2.5 on a 24 by 24 grid. `simplify-js` drops pen jitter before the path is built. Snap, when it is on, rounds a copy of the samples to the grid and leaves the stored hand alone.
+The icons are open paths with round caps and a shared `stroke-width` of 1.5, 2, or 2.5 on a 24 by 24 grid. A short moving average and `simplify-js` drop pen jitter, then a freehand stroke is drawn as cubic curves through the kept points. A sharp turn stays a corner. Straight and Snap keep straight segments. Snap, when it is on, rounds a copy of the samples to the grid and leaves the stored hand alone.
 
 A filled outline bakes the width into the shape. Changing the set weight would mean rebuilding every outline, and small wobbles become blobs at 16px. A centerline keeps one width for the whole set, and that width is still a stroke when the SVG scales to 16, 20, 24, or 32. `perfect-freehand` is not a dependency.
 

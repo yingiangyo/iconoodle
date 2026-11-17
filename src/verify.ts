@@ -1,6 +1,6 @@
 import JSZip from "jszip"
 import { checkSet, type Drift } from "./check.ts"
-import { compileIcon } from "./compile.ts"
+import { compileIcon, livePath } from "./compile.ts"
 import {
   STORAGE_KEY,
   WEIGHTS,
@@ -83,9 +83,9 @@ check(badName.rejection === "invalid-name", "uppercase names are rejected")
 const duplicate = edit(starter, { kind: "rename", id: home, name: "search" })
 check(duplicate.rejection === "duplicate-name", "duplicate names are rejected")
 
-const plain = compileIcon(drawn.session.document, home, null)
-const snapped = compileIcon({ ...drawn.session.document, snap: true }, home, null)
-const heavier = compileIcon({ ...drawn.session.document, weight: 2.5 }, home, null)
+const plain = compileIcon(drawn.session.document, home)
+const snapped = compileIcon({ ...drawn.session.document, snap: true }, home)
+const heavier = compileIcon({ ...drawn.session.document, weight: 2.5 }, home)
 check(plain.d.length > 0, "the line has a path")
 check(plain.stroke === "currentColor", "paint uses currentColor")
 check(plain.fill === "none", "the mark is a centerline")
@@ -94,9 +94,11 @@ check(plain.strokeWidth === 2, "weight is the stroke width")
 check(snapped.d !== plain.d, "snap changes the path")
 check(heavier.d === plain.d, "weight does not rewrite the path")
 check(heavier.strokeWidth === 2.5, "weight changes the stroke width")
-check(plain.d.includes("M") && plain.d.includes("L"), "the path is a polyline")
+check(/^M[\d.]+ [\d.]+(C[\d. -]+)+$/.test(plain.d), "a freehand stroke is one smooth curve")
+check(/^M[\d.]+ [\d.]+(L[\d.]+ [\d.]+)+$/.test(snapped.d), "a snapped stroke keeps straight segments")
+check(livePath(line.samples, false) === plain.d, "the live pen draws what the commit will draw")
 
-const dotMark = compileIcon(dot.session.document, home, null)
+const dotMark = compileIcon(dot.session.document, home)
 check(dotMark.d.startsWith("M") && dotMark.d.includes("L"), "a dot is a zero-length segment")
 
 saveSet(memory, drawn.session.document)
@@ -151,7 +153,7 @@ for (const theme of THEMES) {
   const themed = createSet(theme.names)
   check(themed.icons.every((icon, index) => icon.name === theme.names[index]), `${theme.id} keeps name order`)
   check(themed.icons.every((icon) => icon.strokes.length === 0), `${theme.id} starts blank`)
-  check(themed.icons.every((icon) => compileIcon(themed, icon.id, null).d === ""), `${theme.id} compiles to no path`)
+  check(themed.icons.every((icon) => compileIcon(themed, icon.id).d === ""), `${theme.id} compiles to no path`)
 }
 
 const general = THEMES.find((theme) => theme.id === "general")
@@ -204,7 +206,6 @@ const wobble = edit(starter, {
 const straightened = compileIcon(
   { ...wobble.document, cleanup: { straight: true, circle: false, close: false } },
   home,
-  null,
 )
 check(/^M[\d.]+ [\d.]+L[\d.]+ [\d.]+$/.test(straightened.d), "a near-straight stroke becomes one line")
 
@@ -213,9 +214,29 @@ roundish = edit(roundish, { kind: "commit", id: home, stroke: circleStroke(12, 1
 const circled = compileIcon(
   { ...roundish.document, cleanup: { straight: false, circle: true, close: false } },
   home,
-  null,
 )
 check(circled.d.includes("A") && circled.d.endsWith("Z"), "a near-circle becomes a circle")
+
+const jittery = edit(starter, { kind: "commit", id: home, stroke: jitter(circleStroke(12, 12, 7, 120, 0.12), 0.1) }).session
+const hand = compileIcon(jittery.document, home)
+const handCurves = hand.d.match(/C/g)?.length ?? 0
+check(handCurves >= 6 && !hand.d.includes("L"), "a jittery circle compiles to curves with no facets")
+check(handCurves <= 24, "a jittery circle stays a compact path")
+check(jittery.document.icons[0].strokes[0].samples.length === 121, "smoothing leaves the stored samples alone")
+const looped = compileIcon({ ...jittery.document, cleanup: { straight: false, circle: false, close: true } }, home)
+check(looped.d.includes("C") && looped.d.endsWith("Z"), "a closed hand loop wraps its curve")
+
+const zigzag = edit(starter, {
+  kind: "commit",
+  id: home,
+  stroke: stroke([
+    [4, 4],
+    [20, 8],
+    [4, 12],
+    [20, 16],
+  ]),
+}).session
+check(compileIcon(zigzag.document, home).d === "M4 4L20 8L4 12L20 16", "sharp turns stay corners")
 
 let square = starter
 square = edit(square, {
@@ -236,7 +257,6 @@ square = edit(square, {
 const closed = compileIcon(
   { ...square.document, cleanup: { straight: true, circle: false, close: true } },
   home,
-  null,
 )
 check(closed.d.endsWith("Z"), "a near-closed shape closes")
 check((closed.d.match(/L/g)?.length ?? 0) >= 3, "the closed shape keeps its corners")
@@ -295,6 +315,15 @@ function circleStroke(cx: number, cy: number, radius: number, count: number, gap
     samples.push({ x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle), pressure: 0.5 })
   }
   return { samples }
+}
+
+function jitter(source: Stroke, amount: number): Stroke {
+  let seed = 7
+  const next = () => {
+    seed = (seed * 16807) % 2147483647
+    return (seed / 2147483647 - 0.5) * 2 * amount
+  }
+  return { samples: source.samples.map((sample) => ({ ...sample, x: sample.x + next(), y: sample.y + next() })) }
 }
 
 function buildCompared() {

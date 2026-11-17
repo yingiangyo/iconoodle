@@ -1,5 +1,5 @@
 import simplify from "simplify-js"
-import { tidyOutline, tidyPoints, type Pt, type Tidy } from "./cleanup.ts"
+import { tidyOutline, tidyPoints, type Joins, type Pt, type Tidy } from "./cleanup.ts"
 import {
   ARTBOARD,
   CLEANUP_OFF,
@@ -31,9 +31,20 @@ export type Paint = {
   readonly lineJoin?: LineJoin
 }
 
-const simplifyTolerance = 0.35
+type Hand = {
+  readonly snap: boolean
+  readonly smoothing: number
+  readonly tolerance: number
+  readonly joins: Joins
+}
 
-export function compileIcon(set: IconSet, iconId: IconId, live: Stroke | null, paint?: Paint): Mark {
+const FREEHAND: Hand = { snap: false, smoothing: 0.6, tolerance: 0.2, joins: "curve" }
+const SNAPPED: Hand = { snap: true, smoothing: 0, tolerance: 0.35, joins: "corner" }
+const CORNER_TURN = Math.PI / 3
+// A smooth arc simplified at tolerance t turns by at most about 8t / length at each kept point.
+const CORNER_BEND = 12 * FREEHAND.tolerance
+
+export function compileIcon(set: IconSet, iconId: IconId, paint?: Paint): Mark {
   const icon = set.icons.find((item) => item.id === iconId)
   const parts: string[] = []
   if (icon) {
@@ -41,10 +52,6 @@ export function compileIcon(set: IconSet, iconId: IconId, live: Stroke | null, p
       const path = strokeToPath(stroke, set.snap, set.cleanup)
       if (path) parts.push(path)
     }
-  }
-  if (live && live.samples.length > 0) {
-    const path = strokeToPath(live, set.snap, CLEANUP_OFF)
-    if (path) parts.push(path)
   }
   return {
     d: parts.join(" "),
@@ -58,38 +65,99 @@ export function compileIcon(set: IconSet, iconId: IconId, live: Stroke | null, p
   }
 }
 
+export function livePath(samples: readonly Sample[], snap: boolean): string {
+  return strokeToPath({ samples }, snap, CLEANUP_OFF)
+}
+
 export function drawnPoints(set: IconSet, iconId: IconId): Pt[] {
   const icon = set.icons.find((item) => item.id === iconId)
   if (!icon) return []
+  const hand = handFor(set.snap)
   const points: Pt[] = []
   for (const stroke of icon.strokes) {
-    const prepared = prepare(stroke, set.snap)
+    const prepared = prepare(stroke, hand)
     if (prepared.length === 0) continue
-    points.push(...tidyOutline(tidyPoints(prepared, set.cleanup)))
+    points.push(...tidyOutline(tidyPoints(prepared, set.cleanup, hand.joins)))
   }
   return points
 }
 
 function strokeToPath(stroke: Stroke, snap: boolean, cleanup: Cleanup): string {
-  const points = prepare(stroke, snap)
+  const hand = handFor(snap)
+  const points = prepare(stroke, hand)
   if (points.length === 0) return ""
   if (points.length === 1) return dot(points[0])
-  return pathFor(tidyPoints(points, cleanup))
+  return pathFor(tidyPoints(points, cleanup, hand.joins))
 }
 
-function prepare(stroke: Stroke, snap: boolean): Pt[] {
-  return simplifyPoints(dedupe(stroke.samples.map((sample) => place(sample, snap))))
+function handFor(snap: boolean): Hand {
+  return snap ? SNAPPED : FREEHAND
+}
+
+function prepare(stroke: Stroke, hand: Hand): Pt[] {
+  const placed = dedupe(stroke.samples.map((sample) => place(sample, hand.snap)))
+  return simplifyPoints(smooth(placed, hand.smoothing), hand.tolerance)
 }
 
 function pathFor(tidy: Tidy): string {
   if (tidy.kind === "arc") return arcPath(tidy)
   if (tidy.points.length === 0) return ""
   if (tidy.points.length === 1) return dot(tidy.points[0])
+  if (tidy.joins === "curve") return curvePath(tidy.points, tidy.closed)
   const [first, ...rest] = tidy.points
   let path = `M${num(first.x)} ${num(first.y)}`
   for (const point of rest) path += `L${num(point.x)} ${num(point.y)}`
   if (tidy.closed) path += "Z"
   return path
+}
+
+// Each handle runs along the neighbour chord and is a third of its own segment, so a long
+// straight run keeps its direction and the bend happens in the short segments around it.
+function curvePath(points: readonly Pt[], closed: boolean): string {
+  const count = points.length
+  const tangents = points.map((_, index) => tangentAt(points, index, closed))
+  const [first] = points
+  let path = `M${num(first.x)} ${num(first.y)}`
+  const segments = closed ? count : count - 1
+  for (let index = 0; index < segments; index += 1) {
+    const from = points[index]
+    const to = points[(index + 1) % count]
+    const leaving = tangents[index]
+    const arriving = tangents[(index + 1) % count]
+    if (!leaving && !arriving) {
+      path += `L${num(to.x)} ${num(to.y)}`
+      continue
+    }
+    const chord = direction(from, to)
+    const reach = Math.hypot(to.x - from.x, to.y - from.y) / 3
+    const out = leaving ?? chord
+    const into = arriving ?? chord
+    path += `C${num(from.x + out.x * reach)} ${num(from.y + out.y * reach)} ${num(to.x - into.x * reach)} ${num(to.y - into.y * reach)} ${num(to.x)} ${num(to.y)}`
+  }
+  if (closed) path += "Z"
+  return path
+}
+
+function tangentAt(points: readonly Pt[], index: number, closed: boolean): Pt | null {
+  const count = points.length
+  if (!closed && (index === 0 || index === count - 1)) return null
+  const before = points[(index - 1 + count) % count]
+  const here = points[index]
+  const after = points[(index + 1) % count]
+  const inX = here.x - before.x
+  const inY = here.y - before.y
+  const outX = after.x - here.x
+  const outY = after.y - here.y
+  const turn = Math.abs(Math.atan2(inX * outY - inY * outX, inX * outX + inY * outY))
+  const shorter = Math.min(Math.hypot(inX, inY), Math.hypot(outX, outY))
+  if (turn > CORNER_TURN || turn * shorter > CORNER_BEND) return null
+  return direction(before, after)
+}
+
+function direction(from: Pt, to: Pt): Pt {
+  const length = Math.hypot(to.x - from.x, to.y - from.y)
+  if (length === 0) return { x: 0, y: 0 }
+  return { x: (to.x - from.x) / length, y: (to.y - from.y) / length }
 }
 
 function arcPath(tidy: Extract<Tidy, { kind: "arc" }>): string {
@@ -126,9 +194,35 @@ function dedupe(points: readonly Pt[]): Pt[] {
   return kept
 }
 
-function simplifyPoints(points: Pt[]): Pt[] {
+function smooth(points: Pt[], radius: number): Pt[] {
+  if (radius === 0 || points.length <= 2) return points
+  const along = [0]
+  for (let index = 1; index < points.length; index += 1) {
+    const step = Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y)
+    along.push(along[index - 1] + step)
+  }
+  const total = along[along.length - 1]
+  let start = 0
+  return points.map((point, index) => {
+    const reach = Math.min(radius, along[index], total - along[index])
+    if (reach <= 0) return point
+    while (along[index] - along[start] >= reach) start += 1
+    let x = 0
+    let y = 0
+    let weight = 0
+    for (let other = start; other < points.length && along[other] - along[index] < reach; other += 1) {
+      const share = 1 - Math.abs(along[other] - along[index]) / reach
+      x += points[other].x * share
+      y += points[other].y * share
+      weight += share
+    }
+    return { x: x / weight, y: y / weight }
+  })
+}
+
+function simplifyPoints(points: Pt[], tolerance: number): Pt[] {
   if (points.length <= 2) return points
-  return simplify(points, simplifyTolerance, true)
+  return simplify(points, tolerance, true)
 }
 
 function num(value: number): string {

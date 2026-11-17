@@ -1,6 +1,17 @@
-import { Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react"
+import { ArrowLeft, ArrowRight, Eraser, Link, Undo2, X } from "lucide-react"
+import {
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type RefObject,
+} from "react"
 import { checkSet, driftLabel, type Drift } from "./check.ts"
-import { compileIcon, type Mark } from "./compile.ts"
+import { compileIcon, livePath, type Mark } from "./compile.ts"
 import {
   ARTBOARD,
   WEIGHTS,
@@ -17,9 +28,9 @@ import {
   type IconId,
   type Sample,
   type Session,
-  type Stroke,
 } from "./document.ts"
-import { EXPORT_KINDS, exportSet, iconSvg, type ExportKind } from "./export.ts"
+import { exportSet, type ExportKind } from "./export.ts"
+import { ExportMenu } from "./ExportMenu.tsx"
 import { Gallery } from "./Gallery.tsx"
 import { Guide } from "./Guide.tsx"
 import { guideConcept, themeSlots } from "./glyphs.ts"
@@ -30,13 +41,6 @@ import { setFromHash, shareHash } from "./share.ts"
 import { THEMES, type ThemePack } from "./themes.ts"
 
 const SIZES = [16, 20, 24, 32] as const
-const EXPORT_LABELS: Record<ExportKind, string> = {
-  "svg-zip": "SVG files",
-  sprite: "Sprite",
-  "react-zip": "React",
-  variants: "Variants",
-  sheet: "Figma sheet",
-}
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(() => {
@@ -48,44 +52,47 @@ export default function App() {
   const [libraryChoice, setLibraryChoice] = useState<LibraryId>("lucide")
   const [guide, setGuide] = useState(() => readGuide(localStorage))
   const [hint, setHint] = useState(() => readHint(localStorage))
-  const [live, setLive] = useState<Stroke | null>(null)
+  const [drawing, setDrawing] = useState(false)
   const [nameDraft, setNameDraft] = useState<string | null>(null)
   const [addDraft, setAddDraft] = useState("")
   const [note, setNote] = useState("")
-  const [status, setStatus] = useState("")
+  const [shared, setShared] = useState(false)
+  const [editing, setEditing] = useState(false)
   const [exportError, setExportError] = useState("")
   const [gallery, setGallery] = useState(() => setFromHash(location.hash))
   const sessionRef = useRef(session)
   const pickingRef = useRef(picking)
   const viewRef = useRef(view)
+  const editingRef = useRef(editing)
   const stepRef = useRef<(delta: number) => void>(() => {})
-  const liveRef = useRef<Stroke | null>(null)
+  const samplesRef = useRef<Sample[] | null>(null)
+  const predictedRef = useRef<Sample[]>([])
   const pointerRef = useRef<number | null>(null)
-  const slotRefs = useRef(new Map<string, HTMLButtonElement>())
+  const rectRef = useRef<DOMRect | null>(null)
+  const frameRef = useRef<number | null>(null)
+  const inkRef = useRef<SVGPathElement | null>(null)
   sessionRef.current = session
   pickingRef.current = picking
   viewRef.current = view
+  editingRef.current = editing
 
   const selected = session
     ? (session.document.icons.find((icon) => icon.id === session.document.selectedId) ??
       session.document.icons[0])
     : null
   const drawn = session ? session.document.icons.filter((icon) => icon.strokes.length > 0).length : 0
-  const mod = useMemo(() => (navigator.userAgent.includes("Mac") ? "⌘" : "Ctrl"), [])
-
   const nameValue = selected ? (nameDraft ?? selected.name) : ""
 
   useEffect(() => {
-    if (!selected) return
-    const node = slotRefs.current.get(selected.id)
-    node?.scrollIntoView({ block: "nearest" })
-  }, [selected])
+    if (!shared) return
+    const timer = setTimeout(() => setShared(false), 2000)
+    return () => clearTimeout(timer)
+  }, [shared])
 
   useEffect(() => {
     function onStorage(event: StorageEvent) {
       if (event.key !== STORAGE_KEY) return
-      liveRef.current = null
-      setLive(null)
+      dropLive()
       setNameDraft(null)
       const saved = loadSet(localStorage)
       if (!saved) {
@@ -108,6 +115,11 @@ export default function App() {
       if (isTyping(event.target)) return
       if (event.key === "Escape" && pickingRef.current && sessionRef.current) {
         setPicking(false)
+        return
+      }
+      if (event.key === "Escape" && document.querySelector(":popover-open")) return
+      if (event.key === "Escape" && editingRef.current) {
+        setEditing(false)
         return
       }
       if (event.key === "Escape" && viewRef.current === "set") {
@@ -142,7 +154,7 @@ export default function App() {
         redo()
         return
       }
-      if (modKey && key === "backspace") {
+      if (modKey && key === "backspace" && viewRef.current === "draw") {
         event.preventDefault()
         clearIcon()
         return
@@ -172,11 +184,9 @@ export default function App() {
   }, [])
 
   const marks = useMemo(() => {
-    if (!session || !selected) return []
-    return session.document.icons.map((icon) =>
-      compileIcon(session.document, icon.id, icon.id === selected.id ? live : null),
-    )
-  }, [session, selected, live])
+    if (!session) return []
+    return session.document.icons.map((icon) => compileIcon(session.document, icon.id))
+  }, [session])
 
   function apply(command: Command): EditResult | null {
     const current = sessionRef.current
@@ -191,14 +201,36 @@ export default function App() {
     return result
   }
 
+  function paintInk() {
+    frameRef.current = null
+    const samples = samplesRef.current
+    const current = sessionRef.current
+    if (!samples || !current) return
+    const shown = predictedRef.current.length > 0 ? samples.concat(predictedRef.current) : samples
+    inkRef.current?.setAttribute("d", livePath(shown, current.document.snap))
+  }
+
+  function scheduleInk() {
+    if (frameRef.current === null) frameRef.current = requestAnimationFrame(paintInk)
+  }
+
+  function dropLive() {
+    samplesRef.current = null
+    predictedRef.current = []
+    pointerRef.current = null
+    rectRef.current = null
+    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
+    frameRef.current = null
+    inkRef.current?.removeAttribute("d")
+    setDrawing(false)
+  }
+
   function commitLive() {
     const current = sessionRef.current
-    const stroke = liveRef.current
-    liveRef.current = null
-    pointerRef.current = null
-    setLive(null)
-    if (!current || !stroke || stroke.samples.length === 0) return
-    const result = apply({ kind: "commit", id: current.document.selectedId, stroke })
+    const samples = samplesRef.current
+    dropLive()
+    if (!current || !samples || samples.length === 0) return
+    const result = apply({ kind: "commit", id: current.document.selectedId, stroke: { samples } })
     if (result?.rejection) setNote("That stroke had no usable points.")
     else dismissHint()
   }
@@ -224,9 +256,7 @@ export default function App() {
     if (slots.length === 0) return
     const next = openSession(createSet(slots, library))
     sessionRef.current = next
-    liveRef.current = null
-    pointerRef.current = null
-    setLive(null)
+    dropLive()
     setNameDraft(null)
     setAddDraft("")
     setNote("")
@@ -246,25 +276,21 @@ export default function App() {
   }
 
   function undo() {
-    if (liveRef.current) {
-      liveRef.current = null
-      pointerRef.current = null
-      setLive(null)
+    if (samplesRef.current) {
+      dropLive()
       return
     }
     apply({ kind: "undo" })
   }
 
   function redo() {
-    if (liveRef.current) return
+    if (samplesRef.current) return
     apply({ kind: "redo" })
   }
 
   function clearIcon() {
     const current = sessionRef.current
-    liveRef.current = null
-    pointerRef.current = null
-    setLive(null)
+    dropLive()
     if (!current) return
     apply({ kind: "clear", id: current.document.selectedId })
   }
@@ -314,27 +340,22 @@ export default function App() {
       setNote("")
     }
     setAddDraft("")
+    showDraw()
   }
 
-  function deleteIcon() {
-    const current = sessionRef.current
-    commitLive()
-    if (!current) return
-    const result = apply({ kind: "delete", id: current.document.selectedId })
+  function deleteIcon(id: IconId) {
+    const result = apply({ kind: "delete", id })
     setNote(result?.rejection === "last-icon" ? "Keep at least one icon." : "")
   }
 
-  async function copySvg() {
-    const current = sessionRef.current
-    if (!current) return
-    const text = iconSvg(current.document, current.document.selectedId)
-    try {
-      await navigator.clipboard.writeText(text)
-      setStatus("SVG copied.")
-      setExportError("")
-    } catch {
-      setExportError("Could not copy the SVG.")
-    }
+  function openIcon(id: IconId) {
+    choose(id)
+    showDraw()
+  }
+
+  function showDraw() {
+    setEditing(false)
+    setView("draw")
   }
 
   async function shareSet() {
@@ -343,7 +364,7 @@ export default function App() {
     const url = `${location.origin}${location.pathname}${location.search}#${shareHash(current.document)}`
     try {
       await navigator.clipboard.writeText(url)
-      setStatus("Share link copied.")
+      setShared(true)
       setExportError("")
     } catch {
       setExportError("Could not copy the share link.")
@@ -377,26 +398,29 @@ export default function App() {
 
   function onPointerDown(event: ReactPointerEvent<SVGSVGElement>) {
     if (event.pointerType === "mouse" && event.button !== 0) return
+    if (pointerRef.current !== null) return
     event.currentTarget.setPointerCapture(event.pointerId)
     pointerRef.current = event.pointerId
-    const stroke = { samples: samplesFrom(event) }
-    liveRef.current = stroke
-    setLive(stroke)
+    rectRef.current = event.currentTarget.getBoundingClientRect()
+    samplesRef.current = appendSamples([], samplesFrom(event.nativeEvent, rectRef.current))
+    setDrawing(true)
+    scheduleInk()
   }
 
   function onPointerMove(event: ReactPointerEvent<SVGSVGElement>) {
-    if (pointerRef.current !== event.pointerId || !liveRef.current) return
-    const stroke = { samples: appendSamples(liveRef.current.samples, samplesFrom(event)) }
-    liveRef.current = stroke
-    setLive(stroke)
+    const samples = samplesRef.current
+    const rect = rectRef.current
+    if (pointerRef.current !== event.pointerId || !samples || !rect) return
+    appendSamples(samples, samplesFrom(event.nativeEvent, rect))
+    predictedRef.current = predictedFrom(event.nativeEvent, rect)
+    scheduleInk()
   }
 
   function onPointerUp(event: ReactPointerEvent<SVGSVGElement>) {
     if (pointerRef.current !== event.pointerId) return
-    if (liveRef.current) {
-      const stroke = { samples: appendSamples(liveRef.current.samples, samplesFrom(event)) }
-      liveRef.current = stroke
-    }
+    const samples = samplesRef.current
+    const rect = rectRef.current
+    if (samples && rect) appendSamples(samples, samplesFrom(event.nativeEvent, rect))
     commitLive()
   }
 
@@ -447,27 +471,42 @@ export default function App() {
   const selectedMark = marks[selectedIndex] ?? marks[0]
   const previous = selectedIndex > 0 ? session.document.icons[selectedIndex - 1] : null
   const upcoming = session.document.icons[selectedIndex + 1] ?? null
-  const canUndo = live !== null || session.past.length > 0
-  const canRedo = live === null && session.future.length > 0
-  const canClear = live !== null || selected.strokes.length > 0
+  const canUndo = drawing || session.past.length > 0
+  const canClear = drawing || selected.strokes.length > 0
   const selectedFlags = flags.get(selected.id) ?? []
   const selectedGuide = guideConcept(session.document.library, selected.concept, selected.name)
+  const trace = guide && selectedGuide ? <Guide library={session.document.library} concept={selectedGuide} /> : null
 
   if (view === "draw") {
     return (
       <div className="app is-drawing">
-        <header className="top">
-          <div className="brand">
-            <Logo />
-            <div>
-              <h1>iconoodle</h1>
-              <p className="progress">
-                {selectedIndex + 1} of {session.document.icons.length}
-              </p>
-              <p className="sr" aria-live="polite">
-                {selected.name}, {selectedIndex + 1} of {session.document.icons.length}
-              </p>
-            </div>
+        <header className="top draw-top">
+          <h1 className="sr">iconoodle</h1>
+          <Logo />
+          <div className="draw-title">
+            <input
+              className="name-inline"
+              value={nameValue}
+              onChange={(event) => setNameDraft(event.target.value)}
+              onBlur={commitName}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  event.currentTarget.blur()
+                }
+              }}
+              spellCheck={false}
+              autoCapitalize="none"
+              autoCorrect="off"
+              enterKeyHint="done"
+              aria-label="Icon name"
+            />
+            <p className="progress">
+              {selectedIndex + 1} of {session.document.icons.length}
+            </p>
+            <p className="sr" aria-live="polite">
+              {selected.name}, {selectedIndex + 1} of {session.document.icons.length}
+            </p>
           </div>
           <button type="button" className="toggle" onClick={() => setView("set")}>
             Set
@@ -483,71 +522,26 @@ export default function App() {
               guide={guide}
               onChoose={previous ? () => choose(previous.id) : undefined}
             />
-            <div className="stage-card">
-              <label className="name-field">
-                <span>Name</span>
-                <input
-                  value={nameValue}
-                  onChange={(event) => setNameDraft(event.target.value)}
-                  onBlur={commitName}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault()
-                      event.currentTarget.blur()
-                    }
-                  }}
-                  spellCheck={false}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  enterKeyHint="done"
-                  aria-label="Icon name"
-                />
-              </label>
+            <div className="canvas-fit">
               <div className="canvas-frame">
-                <div className="canvas-stack">
-                  {guide && selectedGuide ? (
-                    <div className="trace" aria-hidden="true">
-                      <Guide library={session.document.library} concept={selectedGuide} />
-                    </div>
-                  ) : null}
-                  <svg
-                    className="canvas"
-                    viewBox={`0 0 ${ARTBOARD} ${ARTBOARD}`}
-                    role="application"
-                    aria-label={`Drawing surface for ${selected.name}`}
-                    onPointerDown={onPointerDown}
-                    onPointerMove={onPointerMove}
-                    onPointerUp={onPointerUp}
-                    onPointerCancel={onPointerUp}
-                    onContextMenu={(event) => event.preventDefault()}
-                  >
-                    <Grid />
-                    <Keyline />
-                    {selectedMark?.d ? (
-                      <path
-                        d={selectedMark.d}
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth={selectedMark.strokeWidth}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    ) : null}
-                    {!selectedMark?.d && !(guide && selectedGuide) ? (
-                      <text x="12" y="13" textAnchor="middle" className="canvas-hint">
-                        Draw
-                      </text>
-                    ) : null}
-                  </svg>
-                </div>
+                <Surface
+                  name={selected.name}
+                  mark={selectedMark}
+                  trace={trace}
+                  drawing={drawing}
+                  inkRef={inkRef}
+                  onPointerDown={onPointerDown}
+                  onPointerMove={onPointerMove}
+                  onPointerUp={onPointerUp}
+                />
               </div>
-              {hint && selected.strokes.length === 0 ? (
-                <p className="hint">Draw this mark, then Next.</p>
-              ) : null}
-              {selectedFlags.length > 0 ? (
-                <p className="stage-flag">{selectedFlags.map(driftLabel).join(" · ")}</p>
-              ) : null}
-              {note ? <p className="note">{note}</p> : null}
+              <div className="draw-notes">
+                {hint && selected.strokes.length === 0 ? <p className="hint">Draw this mark, then Next.</p> : null}
+                {selectedFlags.length > 0 ? (
+                  <p className="stage-flag">{selectedFlags.map(driftLabel).join(" · ")}</p>
+                ) : null}
+                {note ? <p className="note">{note}</p> : null}
+              </div>
             </div>
             <Peek
               icon={upcoming}
@@ -557,16 +551,19 @@ export default function App() {
               onChoose={upcoming ? () => choose(upcoming.id) : undefined}
             />
           </div>
-          <div className="draw-actions">
-            <button type="button" onClick={() => stepRef.current(-1)} disabled={!previous}>
-              Back
+          <nav className="draw-actions" aria-label="Drawing">
+            <button type="button" aria-label="Back" onClick={() => stepRef.current(-1)} disabled={!previous}>
+              <ArrowLeft aria-hidden="true" />
+              <span className="action-label">Back</span>
               <kbd>←</kbd>
             </button>
-            <button type="button" onClick={undo} disabled={!canUndo}>
-              Undo
+            <button type="button" aria-label="Undo" onClick={undo} disabled={!canUndo}>
+              <Undo2 aria-hidden="true" />
+              <span className="action-label">Undo</span>
             </button>
-            <button type="button" onClick={clearIcon} disabled={!canClear}>
-              Clear
+            <button type="button" aria-label="Clear" onClick={clearIcon} disabled={!canClear}>
+              <Eraser aria-hidden="true" />
+              <span className="action-label">Clear</span>
             </button>
             <button
               type="button"
@@ -576,15 +573,19 @@ export default function App() {
               title={upcoming ? `Next, ${upcoming.name}` : "Last icon"}
               aria-keyshortcuts="Enter ArrowRight"
             >
-              {upcoming ? `Next ${upcoming.name}` : "Last icon"}
+              <span className="next-label">{upcoming ? `Next ${upcoming.name}` : "Last icon"}</span>
               {upcoming ? <kbd>↵</kbd> : null}
+              {upcoming ? <ArrowRight aria-hidden="true" /> : null}
             </button>
-          </div>
+          </nav>
         </main>
         </Suspense>
       </div>
     )
   }
+
+  const icons = session.document.icons
+  const drawnIcons = icons.flatMap((icon, index) => (icon.strokes.length > 0 ? [{ icon, mark: marks[index] }] : []))
 
   return (
     <div className="app set-panel">
@@ -593,281 +594,255 @@ export default function App() {
           <Logo />
           <div>
             <h1>iconoodle</h1>
-            <p>
-              {selectedIndex + 1} of {session.document.icons.length}
+            <p className="progress">
+              {drawn} of {icons.length} drawn
             </p>
           </div>
         </div>
-        <button type="button" className="next" onClick={() => setView("draw")}>
-          Back to drawing
+        <button type="button" className="toggle" onClick={showDraw}>
+          Draw
         </button>
       </header>
-      <div className="toolbar">
-          <div className="control">
-            <span className="control-label">Weight</span>
-            <div className="segment" role="group" aria-label="Stroke weight">
-              {WEIGHTS.map((weight) => (
-                <button
-                  key={weight}
-                  type="button"
-                  aria-pressed={session.document.weight === weight}
-                  onClick={() => apply({ kind: "weight", weight })}
-                >
-                  {weight}
-                </button>
-              ))}
-            </div>
-          </div>
-          <button
-            type="button"
-            className="toggle"
-            aria-pressed={guide}
-            onClick={toggleGuide}
-          >
-            Guide
-            <kbd>H</kbd>
-          </button>
-          <button
-            type="button"
-            className="toggle"
-            aria-pressed={session.document.snap}
-            onClick={() => apply({ kind: "snap", snap: !session.document.snap })}
-          >
-            Snap
-            <kbd>G</kbd>
-          </button>
-          <div className="exports">
-            {EXPORT_KINDS.map((kind) => (
-              <button key={kind} type="button" className="export" onClick={() => void download(kind)}>
-                {EXPORT_LABELS[kind]}
-              </button>
-            ))}
-            <button type="button" className="export" onClick={() => void shareSet()}>
-              Share
-            </button>
-          </div>
-      </div>
 
       <Suspense fallback={null}>
-      <div className="desk">
-        <aside className="library">
-          <div className="library-head">
-            <h2>Set</h2>
-            <span>
-              {drawn} of {session.document.icons.length} drawn
-            </span>
-          </div>
-          <div className="slots">
-            {session.document.icons.map((icon, index) => (
+        <main className="set-body">
+          <section className="set-icons" aria-labelledby="set-icons-title">
+            <div className="section-head">
+              <h2 id="set-icons-title">Icons</h2>
               <button
-                key={icon.id}
                 type="button"
-                ref={(node) => {
-                  if (node) slotRefs.current.set(icon.id, node)
-                  else slotRefs.current.delete(icon.id)
-                }}
-                className={icon.id === selected.id ? "slot is-selected" : "slot"}
-                title={icon.name}
-                onClick={() => choose(icon.id)}
+                className="text-button"
+                aria-pressed={editing}
+                onClick={() => setEditing((current) => !current)}
               >
-                <span className="slot-preview">
-                  {guide && icon.strokes.length === 0 && guideConcept(session.document.library, icon.concept, icon.name) ? (
-                    <span className="slot-guide">
-                      <Guide
-                        library={session.document.library}
-                        concept={guideConcept(session.document.library, icon.concept, icon.name) ?? icon.concept}
-                      />
-                    </span>
-                  ) : null}
-                  <MarkView
-                    mark={marks[index]}
-                    size={36}
-                    placeholder={!(guide && icon.strokes.length === 0 && guideConcept(session.document.library, icon.concept, icon.name))}
-                  />
-                </span>
-                <span className="slot-name">{icon.name}</span>
-                {icon.strokes.length > 0 ? <span className="slot-dot" /> : null}
-                {(flags.get(icon.id)?.length ?? 0) > 0 ? (
-                  <span className="slot-flag" title={(flags.get(icon.id) ?? []).map(driftLabel).join(". ")}>
-                    {(flags.get(icon.id) ?? []).length}
-                  </span>
-                ) : null}
+                {editing ? "Done" : "Edit"}
               </button>
-            ))}
-          </div>
-          <form className="add-form" onSubmit={addIcon}>
-            <input
-              value={addDraft}
-              onChange={(event) => setAddDraft(event.target.value)}
-              placeholder="new-icon"
-              aria-label="New icon name"
-              spellCheck={false}
-              autoCapitalize="none"
-              autoCorrect="off"
-            />
-            <button type="submit">Add</button>
-          </form>
-          <div className="library-switch">
-            <span className="control-label">Tracing library</span>
-            <div className="segment" role="group" aria-label="Tracing library">
-              {LIBRARIES.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  aria-pressed={session.document.library === item.id}
-                  onClick={() => apply({ kind: "library", library: item.id })}
-                >
-                  {item.label}
-                </button>
-              ))}
             </div>
-            <p>Names stay. Only the tracing picture changes.</p>
-          </div>
-          <button
-            type="button"
-            className="new-set"
-            onClick={() => {
-              commitLive()
-              setLibraryChoice(session.document.library)
-              setPicking(true)
-            }}
-          >
-            New set
-          </button>
-        </aside>
-
-        <section className="stage">
-          <div className="stage-card">
-            <label className="name-field">
-              <span>Name</span>
+            <ul className={editing ? "slots is-editing" : "slots"}>
+              {icons.map((icon, index) => (
+                <Slot
+                  key={icon.id}
+                  icon={icon}
+                  mark={marks[index]}
+                  library={session.document.library}
+                  guide={guide}
+                  current={icon.id === selected.id}
+                  drifts={flags.get(icon.id) ?? []}
+                  editing={editing}
+                  canDelete={icons.length > 1}
+                  onOpen={() => openIcon(icon.id)}
+                  onDelete={() => deleteIcon(icon.id)}
+                />
+              ))}
+            </ul>
+            <form className="add-form" onSubmit={addIcon}>
               <input
-                value={nameValue}
-                onChange={(event) => setNameDraft(event.target.value)}
-                onBlur={commitName}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.currentTarget.blur()
-                }}
+                value={addDraft}
+                onChange={(event) => setAddDraft(event.target.value)}
+                placeholder="new-icon"
+                aria-label="New icon name"
                 spellCheck={false}
                 autoCapitalize="none"
                 autoCorrect="off"
-                aria-label="Icon name"
+                enterKeyHint="go"
               />
-            </label>
-            <div className="canvas-frame">
-              <div className="canvas-stack">
-              {guide && selectedGuide ? (
-                <div className="trace" aria-hidden="true">
-                  <Guide library={session.document.library} concept={selectedGuide} />
-                </div>
-              ) : null}
-              <svg
-                className="canvas"
-                viewBox={`0 0 ${ARTBOARD} ${ARTBOARD}`}
-                role="application"
-                aria-label={`Drawing surface for ${selected.name}`}
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={onPointerUp}
-                onPointerCancel={onPointerUp}
-                onContextMenu={(event) => event.preventDefault()}
-              >
-                <Grid />
-                <Keyline />
-                {selectedMark?.d ? (
-                  <path
-                    d={selectedMark.d}
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={selectedMark.strokeWidth}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                ) : null}
-                {!selectedMark?.d && !(guide && selectedGuide) ? (
-                  <text x="12" y="13" textAnchor="middle" className="canvas-hint">
-                    Draw
-                  </text>
-                ) : null}
-              </svg>
-              </div>
-              {session.document.snap ? <span className="snap-flag">Snap on</span> : null}
-            </div>
-            <div className="tools">
-              <button type="button" onClick={undo} disabled={!canUndo}>
-                Undo
-                <kbd>{mod}+Z</kbd>
-              </button>
-              <button type="button" onClick={redo} disabled={!canRedo}>
-                Redo
-                <kbd>{mod}+⇧Z</kbd>
-              </button>
-              <button type="button" onClick={clearIcon} disabled={!canClear}>
-                Clear
-                <kbd>{mod}+⌫</kbd>
-              </button>
-              <button
-                type="button"
-                className="danger"
-                onClick={deleteIcon}
-                disabled={session.document.icons.length === 1}
-              >
-                Delete
-              </button>
-              <button type="button" onClick={() => void copySvg()}>
-                Copy SVG
-              </button>
-            </div>
-            <div className="tools tidy" role="group" aria-label="Stroke cleanup">
-              <button
-                type="button"
-                aria-pressed={session.document.cleanup.straight}
-                onClick={() => setCleanup({ straight: !session.document.cleanup.straight })}
-              >
-                Straight
-              </button>
-              <button
-                type="button"
-                aria-pressed={session.document.cleanup.circle}
-                onClick={() => setCleanup({ circle: !session.document.cleanup.circle })}
-              >
-                Circle
-              </button>
-              <button
-                type="button"
-                aria-pressed={session.document.cleanup.close}
-                onClick={() => setCleanup({ close: !session.document.cleanup.close })}
-              >
-                Close
-              </button>
-            </div>
-            {selectedFlags.length > 0 ? (
-              <ul className="drifts">
-                {selectedFlags.map((drift) => (
-                  <li key={drift.kind}>{driftLabel(drift)}</li>
-                ))}
-              </ul>
-            ) : null}
-            {note ? <p className="note">{note}</p> : null}
-            {status ? <p className="status">{status}</p> : null}
-            {exportError ? <p className="note">{exportError}</p> : null}
-          </div>
-        </section>
-      </div>
-      </Suspense>
+              <button type="submit">Add icon</button>
+            </form>
+          </section>
 
-      <section className="preview" aria-label="Preview">
-        <div className="preview-head">
-          <h2>Preview</h2>
-          <span>16, 20, 24, and 32 on both grounds</span>
-        </div>
-        <div className="grounds">
-          <Ground title="Light" tone="light" marks={marks} names={session.document.icons.map((icon) => icon.name)} ids={session.document.icons.map((icon) => icon.id)} onChoose={choose} />
-          <Ground title="Dark" tone="dark" marks={marks} names={session.document.icons.map((icon) => icon.name)} ids={session.document.icons.map((icon) => icon.id)} onChoose={choose} />
-        </div>
-      </section>
-      <Mockup marks={marks} />
+          <section className="settings" aria-labelledby="settings-title">
+            <div className="section-head">
+              <h2 id="settings-title">Drawing</h2>
+            </div>
+            <div className="setting">
+              <span className="setting-label">Weight</span>
+              <div className="segment" role="group" aria-label="Stroke weight">
+                {WEIGHTS.map((weight) => (
+                  <button
+                    key={weight}
+                    type="button"
+                    aria-pressed={session.document.weight === weight}
+                    onClick={() => apply({ kind: "weight", weight })}
+                  >
+                    {weight}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="setting">
+              <span className="setting-label">Assist</span>
+              <div className="chips" role="group" aria-label="Drawing assist">
+                <button type="button" aria-pressed={guide} onClick={toggleGuide} aria-keyshortcuts="H">
+                  Guide
+                  <kbd>H</kbd>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={session.document.snap}
+                  onClick={() => apply({ kind: "snap", snap: !session.document.snap })}
+                  aria-keyshortcuts="G"
+                >
+                  Snap
+                  <kbd>G</kbd>
+                </button>
+              </div>
+            </div>
+            <div className="setting">
+              <span className="setting-label">Cleanup</span>
+              <div className="chips" role="group" aria-label="Stroke cleanup">
+                <button
+                  type="button"
+                  aria-pressed={session.document.cleanup.straight}
+                  onClick={() => setCleanup({ straight: !session.document.cleanup.straight })}
+                >
+                  Straight
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={session.document.cleanup.circle}
+                  onClick={() => setCleanup({ circle: !session.document.cleanup.circle })}
+                >
+                  Circle
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={session.document.cleanup.close}
+                  onClick={() => setCleanup({ close: !session.document.cleanup.close })}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="setting is-stacked">
+              <span className="setting-label">Tracing library</span>
+              <LibrarySegment
+                library={session.document.library}
+                onLibrary={(library) => apply({ kind: "library", library })}
+              />
+              <p className="setting-note">Names stay. Only the tracing picture changes.</p>
+            </div>
+            <button
+              type="button"
+              className="new-set"
+              onClick={() => {
+                setLibraryChoice(session.document.library)
+                setPicking(true)
+              }}
+            >
+              New set
+            </button>
+          </section>
+
+          <section className="preview" aria-labelledby="preview-title">
+            <div className="section-head">
+              <h2 id="preview-title">Preview</h2>
+              <span>16, 20, 24, and 32 on both grounds</span>
+            </div>
+            {drawnIcons.length > 0 ? (
+              <div className="grounds">
+                <Ground title="Light" tone="light" items={drawnIcons} onChoose={openIcon} />
+                <Ground title="Dark" tone="dark" items={drawnIcons} onChoose={openIcon} />
+              </div>
+            ) : (
+              <p className="empty">Your drawn icons show up here at four sizes, on light and dark.</p>
+            )}
+          </section>
+          <Mockup marks={marks} />
+        </main>
+      </Suspense>
       <Colophon library={session.document.library} />
+
+      <footer className="set-actions">
+        {exportError ? (
+          <p className="note" role="alert">
+            {exportError}
+          </p>
+        ) : null}
+        <div className="set-actions-row">
+          <button type="button" className="share" onClick={() => void shareSet()}>
+            <Link aria-hidden="true" />
+            {shared ? "Link copied" : "Share link"}
+          </button>
+          <ExportMenu onExport={(kind) => void download(kind)} />
+        </div>
+        <p className="sr" aria-live="polite">
+          {shared ? "Share link copied." : ""}
+        </p>
+      </footer>
     </div>
+  )
+}
+
+function LibrarySegment({ library, onLibrary }: { library: LibraryId; onLibrary: (library: LibraryId) => void }) {
+  const rowRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const row = rowRef.current
+    const pressed = row?.querySelector<HTMLElement>('[aria-pressed="true"]')
+    if (row && pressed && pressed.offsetLeft + pressed.offsetWidth > row.clientWidth) {
+      row.scrollLeft = pressed.offsetLeft - 8
+    }
+  }, [])
+  return (
+    <div ref={rowRef} className="segment library-row" role="group" aria-label="Tracing library">
+      {LIBRARIES.map((item) => (
+        <button key={item.id} type="button" aria-pressed={library === item.id} onClick={() => onLibrary(item.id)}>
+          {item.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+type SlotProps = {
+  icon: Icon
+  mark: Mark
+  library: LibraryId
+  guide: boolean
+  current: boolean
+  drifts: readonly Drift[]
+  editing: boolean
+  canDelete: boolean
+  onOpen: () => void
+  onDelete: () => void
+}
+
+function Slot({ icon, mark, library, guide, current, drifts, editing, canDelete, onOpen, onDelete }: SlotProps) {
+  const isDrawn = icon.strokes.length > 0
+  const concept = guide && !isDrawn ? guideConcept(library, icon.concept, icon.name) : null
+  const state = isDrawn ? "drawn" : "not drawn"
+  return (
+    <li className={isDrawn ? "slot-cell is-drawn" : "slot-cell"}>
+      <button
+        type="button"
+        className="slot"
+        aria-current={current ? "true" : undefined}
+        aria-label={`${icon.name}, ${state}${drifts.length > 0 ? `, ${drifts.map(driftLabel).join(", ")}` : ""}`}
+        disabled={editing}
+        onClick={onOpen}
+      >
+        <span className="slot-preview">
+          {concept ? (
+            <span className="slot-guide">
+              <Guide library={library} concept={concept} />
+            </span>
+          ) : null}
+          <MarkView mark={mark} size={36} placeholder={!concept} />
+        </span>
+        <span className="slot-name">{icon.name}</span>
+      </button>
+      {drifts.length > 0 && !editing ? (
+        <span className="slot-flag" aria-hidden="true">
+          {drifts.length}
+        </span>
+      ) : null}
+      {editing && canDelete ? (
+        <button type="button" className="slot-remove" aria-label={`Delete ${icon.name}`} onClick={onDelete}>
+          <span>
+            <X aria-hidden="true" />
+          </span>
+        </button>
+      ) : null}
+    </li>
   )
 }
 
@@ -890,18 +865,7 @@ function ThemePicker({
       <div className="picker-copy">
         <h2>{replacing ? "New set" : "Start a set"}</h2>
         <p>Choose a library and a product. Each slot arrives named, with a faint outline you can trace.</p>
-        <div className="segment library-pick" role="group" aria-label="Tracing library">
-          {LIBRARIES.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              aria-pressed={library === item.id}
-              onClick={() => onLibrary(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+        <LibrarySegment library={library} onLibrary={onLibrary} />
         <p className="picker-license">
           {info.label} is © {info.holder},{" "}
           <a href={info.licenseUrl} target="_blank" rel="noreferrer">
@@ -994,19 +958,17 @@ function Peek({
   )
 }
 
+type GroundItem = { icon: Icon; mark: Mark }
+
 function Ground({
   title,
   tone,
-  marks,
-  names,
-  ids,
+  items,
   onChoose,
 }: {
   title: string
   tone: "light" | "dark"
-  marks: readonly Mark[]
-  names: readonly string[]
-  ids: readonly IconId[]
+  items: readonly GroundItem[]
   onChoose: (id: IconId) => void
 }) {
   return (
@@ -1016,13 +978,14 @@ function Ground({
         <div className="strip" key={size}>
           <span className="strip-size">{size}</span>
           <div className="strip-icons">
-            {marks.map((mark, index) => (
+            {items.map(({ icon, mark }) => (
               <button
-                key={`${ids[index]}-${size}`}
+                key={`${icon.id}-${size}`}
                 type="button"
                 className="strip-cell"
-                title={names[index]}
-                onClick={() => onChoose(ids[index])}
+                aria-label={`${icon.name} at ${size}`}
+                title={icon.name}
+                onClick={() => onChoose(icon.id)}
               >
                 <MarkView mark={mark} size={size} />
               </button>
@@ -1043,6 +1006,66 @@ function MarkView({ mark, size, placeholder = false }: { mark: Mark; size: numbe
         <rect x="4" y="4" width="16" height="16" strokeWidth="0.6" strokeOpacity="0.28" />
       ) : null}
     </svg>
+  )
+}
+
+type SurfaceProps = {
+  name: string
+  mark: Mark | undefined
+  trace: ReactNode
+  drawing: boolean
+  inkRef: RefObject<SVGPathElement | null>
+  onPointerDown: (event: ReactPointerEvent<SVGSVGElement>) => void
+  onPointerMove: (event: ReactPointerEvent<SVGSVGElement>) => void
+  onPointerUp: (event: ReactPointerEvent<SVGSVGElement>) => void
+}
+
+function Surface({ name, mark, trace, drawing, inkRef, onPointerDown, onPointerMove, onPointerUp }: SurfaceProps) {
+  return (
+    <div className="canvas-stack">
+      {trace ? (
+        <div className="trace" aria-hidden="true">
+          {trace}
+        </div>
+      ) : null}
+      <svg
+        className="canvas"
+        viewBox={`0 0 ${ARTBOARD} ${ARTBOARD}`}
+        role="application"
+        aria-label={`Drawing surface for ${name}`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onContextMenu={(event) => event.preventDefault()}
+      >
+        <Grid />
+        <Keyline />
+        {mark?.d ? (
+          <path
+            d={mark.d}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={mark.strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ) : null}
+        <path
+          ref={inkRef}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={mark?.strokeWidth}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        {!mark?.d && !trace && !drawing ? (
+          <text x="12" y="13" textAnchor="middle" className="canvas-hint">
+            Draw
+          </text>
+        ) : null}
+      </svg>
+    </div>
   )
 }
 
@@ -1084,11 +1107,16 @@ function Logo() {
   )
 }
 
-function samplesFrom(event: ReactPointerEvent<SVGSVGElement>): Sample[] {
-  const native = event.nativeEvent
-  const coalesced = typeof native.getCoalescedEvents === "function" ? native.getCoalescedEvents() : []
-  const points = coalesced.length > 0 ? coalesced : [native]
-  const rect = event.currentTarget.getBoundingClientRect()
+function samplesFrom(event: PointerEvent, rect: DOMRect): Sample[] {
+  const coalesced = typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : []
+  return toSamples(coalesced.length > 0 ? coalesced : [event], rect)
+}
+
+function predictedFrom(event: PointerEvent, rect: DOMRect): Sample[] {
+  return typeof event.getPredictedEvents === "function" ? toSamples(event.getPredictedEvents(), rect) : []
+}
+
+function toSamples(points: readonly PointerEvent[], rect: DOMRect): Sample[] {
   const samples: Sample[] = []
   for (const point of points) {
     const sample = toSample(point.clientX, point.clientY, point.pressure, rect)
@@ -1111,8 +1139,7 @@ function toSample(
   return { x, y, pressure: sensed }
 }
 
-function appendSamples(existing: readonly Sample[], next: readonly Sample[]): Sample[] {
-  const samples = [...existing]
+function appendSamples(samples: Sample[], next: readonly Sample[]): Sample[] {
   for (const sample of next) {
     const previous = samples[samples.length - 1]
     if (previous && Math.hypot(previous.x - sample.x, previous.y - sample.y) < 0.04) continue
