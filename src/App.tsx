@@ -12,6 +12,7 @@ import {
 } from "react"
 import { checkSet, driftLabel, type Drift } from "./check.ts"
 import { compileIcon, livePath, type Mark } from "./compile.ts"
+import { buzz, shareNatively } from "./device.ts"
 import {
   ARTBOARD,
   WEIGHTS,
@@ -35,10 +36,15 @@ import { Gallery } from "./Gallery.tsx"
 import { Guide } from "./Guide.tsx"
 import { guideConcept, themeSlots } from "./glyphs.ts"
 import { GUIDE_KEY, HINT_KEY, readGuide, readHint } from "./guides.ts"
-import { LIBRARIES, libraryInfo, type LibraryId } from "./libraries.ts"
+import { LIBRARY_IDS, cycleChoice, libraryInfo, type GuideChoice, type LibraryId } from "./libraries.ts"
+import { LibraryMenu } from "./LibraryMenu.tsx"
+import { LibrarySegment } from "./LibrarySegment.tsx"
 import { Mockup } from "./Mockup.tsx"
 import { setFromHash, shareHash } from "./share.ts"
+import { SMOOTH_KEY, SMOOTH_LABELS, SMOOTH_LEVELS, readSmooth, type SmoothLevel } from "./smooth.ts"
+import { useSwipe } from "./swipe.ts"
 import { THEMES, type ThemePack } from "./themes.ts"
+import { createTouches, touchDown, touchMove, touchUp, type Landing } from "./touches.ts"
 
 const SIZES = [16, 20, 24, 32] as const
 
@@ -52,6 +58,7 @@ export default function App() {
   const [libraryChoice, setLibraryChoice] = useState<LibraryId>("lucide")
   const [guide, setGuide] = useState(() => readGuide(localStorage))
   const [hint, setHint] = useState(() => readHint(localStorage))
+  const [smoothness, setSmoothness] = useState(() => readSmooth(localStorage))
   const [drawing, setDrawing] = useState(false)
   const [nameDraft, setNameDraft] = useState<string | null>(null)
   const [addDraft, setAddDraft] = useState("")
@@ -64,6 +71,8 @@ export default function App() {
   const pickingRef = useRef(picking)
   const viewRef = useRef(view)
   const editingRef = useRef(editing)
+  const guideRef = useRef(guide)
+  const smoothRef = useRef(smoothness)
   const stepRef = useRef<(delta: number) => void>(() => {})
   const samplesRef = useRef<Sample[] | null>(null)
   const predictedRef = useRef<Sample[]>([])
@@ -75,6 +84,12 @@ export default function App() {
   pickingRef.current = picking
   viewRef.current = view
   editingRef.current = editing
+  guideRef.current = guide
+  smoothRef.current = smoothness
+  const swipe = useSwipe((delta) => {
+    stepRef.current(delta)
+    buzz(8)
+  })
 
   const selected = session
     ? (session.document.icons.find((icon) => icon.id === session.document.selectedId) ??
@@ -137,8 +152,13 @@ export default function App() {
         stepRef.current(-1)
         return
       }
-      const key = event.key.toLowerCase()
       const modKey = event.metaKey || event.ctrlKey
+      if (!modKey && (event.key === "[" || event.key === "]")) {
+        event.preventDefault()
+        cycleLibrary(event.key === "]" ? 1 : -1)
+        return
+      }
+      const key = event.key.toLowerCase()
       if (modKey && key === "z" && event.shiftKey) {
         event.preventDefault()
         redo()
@@ -207,7 +227,7 @@ export default function App() {
     const current = sessionRef.current
     if (!samples || !current) return
     const shown = predictedRef.current.length > 0 ? samples.concat(predictedRef.current) : samples
-    inkRef.current?.setAttribute("d", livePath(shown, current.document.snap))
+    inkRef.current?.setAttribute("d", livePath({ samples: shown, smooth: smoothRef.current }, current.document.snap))
   }
 
   function scheduleInk() {
@@ -230,9 +250,23 @@ export default function App() {
     const samples = samplesRef.current
     dropLive()
     if (!current || !samples || samples.length === 0) return
-    const result = apply({ kind: "commit", id: current.document.selectedId, stroke: { samples } })
-    if (result?.rejection) setNote("That stroke had no usable points.")
-    else dismissHint()
+    const result = apply({
+      kind: "commit",
+      id: current.document.selectedId,
+      stroke: { samples, smooth: smoothRef.current },
+    })
+    if (result?.rejection) {
+      setNote("That stroke had no usable points.")
+      return
+    }
+    dismissHint()
+    buzz(8)
+  }
+
+  function chooseSmooth(level: SmoothLevel) {
+    smoothRef.current = level
+    localStorage.setItem(SMOOTH_KEY, String(level))
+    setSmoothness(level)
   }
 
   function dismissHint() {
@@ -243,12 +277,27 @@ export default function App() {
     })
   }
 
+  function showGuide(shown: boolean) {
+    if (guideRef.current === shown) return
+    guideRef.current = shown
+    localStorage.setItem(GUIDE_KEY, shown ? "1" : "0")
+    setGuide(shown)
+  }
+
   function toggleGuide() {
-    setGuide((current) => {
-      const next = !current
-      localStorage.setItem(GUIDE_KEY, next ? "1" : "0")
-      return next
-    })
+    showGuide(!guideRef.current)
+  }
+
+  function chooseLibrary(choice: GuideChoice) {
+    showGuide(choice !== "off")
+    if (choice !== "off") apply({ kind: "library", library: choice })
+    buzz(8)
+  }
+
+  function cycleLibrary(delta: number) {
+    const current = sessionRef.current
+    if (!current) return
+    chooseLibrary(cycleChoice(guideRef.current ? current.document.library : "off", delta))
   }
 
   function startTheme(theme: ThemePack, library: LibraryId) {
@@ -358,10 +407,20 @@ export default function App() {
     setView("draw")
   }
 
+  function showSet() {
+    commitLive()
+    setView("set")
+  }
+
   async function shareSet() {
     const current = sessionRef.current
     if (!current) return
     const url = `${location.origin}${location.pathname}${location.search}#${shareHash(current.document)}`
+    const handoff = await shareNatively({ title: "iconoodle", text: "A hand-drawn icon set", url })
+    if (handoff !== "unavailable") {
+      setExportError("")
+      return
+    }
     try {
       await navigator.clipboard.writeText(url)
       setShared(true)
@@ -383,6 +442,9 @@ export default function App() {
     setExportError("")
     try {
       const file = await exportSet(current.document, kind)
+      const shareable = new File([file.blob], file.filename, { type: file.blob.type || "application/octet-stream" })
+      const handoff = await shareNatively({ files: [shareable], title: file.filename })
+      if (handoff !== "unavailable") return
       const url = URL.createObjectURL(file.blob)
       const anchor = document.createElement("a")
       anchor.href = url
@@ -396,9 +458,10 @@ export default function App() {
     }
   }
 
-  function onPointerDown(event: ReactPointerEvent<SVGSVGElement>) {
-    if (event.pointerType === "mouse" && event.button !== 0) return
-    if (pointerRef.current !== null) return
+  function onPointerDown(event: ReactPointerEvent<SVGSVGElement>, landing: Landing) {
+    if (landing === "ignore") return
+    dropLive()
+    if (landing === "cancel") return
     event.currentTarget.setPointerCapture(event.pointerId)
     pointerRef.current = event.pointerId
     rectRef.current = event.currentTarget.getBoundingClientRect()
@@ -508,12 +571,13 @@ export default function App() {
               {selected.name}, {selectedIndex + 1} of {session.document.icons.length}
             </p>
           </div>
-          <button type="button" className="toggle" onClick={() => setView("set")}>
+          <LibraryMenu value={guide ? session.document.library : "off"} onChoose={chooseLibrary} />
+          <button type="button" className="toggle" onClick={showSet}>
             Set
           </button>
         </header>
         <Suspense fallback={null}>
-        <main className="draw">
+        <main className="draw" {...swipe.handlers}>
           <div className="draw-stage">
             <Peek
               icon={previous}
@@ -522,7 +586,7 @@ export default function App() {
               guide={guide}
               onChoose={previous ? () => choose(previous.id) : undefined}
             />
-            <div className="canvas-fit">
+            <div className="canvas-fit" ref={swipe.cardRef}>
               <div className="canvas-frame">
                 <Surface
                   name={selected.name}
@@ -533,6 +597,10 @@ export default function App() {
                   onPointerDown={onPointerDown}
                   onPointerMove={onPointerMove}
                   onPointerUp={onPointerUp}
+                  onTwoFingerTap={() => {
+                    undo()
+                    buzz(12)
+                  }}
                 />
               </div>
               <div className="draw-notes">
@@ -670,6 +738,24 @@ export default function App() {
               </div>
             </div>
             <div className="setting">
+              <div>
+                <span className="setting-label">Smoothness</span>
+                <p className="setting-note">New strokes</p>
+              </div>
+              <div className="segment" role="group" aria-label="Smoothness">
+                {SMOOTH_LEVELS.map((level) => (
+                  <button
+                    key={level}
+                    type="button"
+                    aria-pressed={smoothness === level}
+                    onClick={() => chooseSmooth(level)}
+                  >
+                    {SMOOTH_LABELS[level]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="setting">
               <span className="setting-label">Assist</span>
               <div className="chips" role="group" aria-label="Drawing assist">
                 <button type="button" aria-pressed={guide} onClick={toggleGuide} aria-keyshortcuts="H">
@@ -716,8 +802,9 @@ export default function App() {
             <div className="setting is-stacked">
               <span className="setting-label">Tracing library</span>
               <LibrarySegment
-                library={session.document.library}
-                onLibrary={(library) => apply({ kind: "library", library })}
+                choices={LIBRARY_IDS}
+                value={session.document.library}
+                onChoose={(library) => apply({ kind: "library", library })}
               />
               <p className="setting-note">Names stay. Only the tracing picture changes.</p>
             </div>
@@ -769,26 +856,6 @@ export default function App() {
           {shared ? "Share link copied." : ""}
         </p>
       </footer>
-    </div>
-  )
-}
-
-function LibrarySegment({ library, onLibrary }: { library: LibraryId; onLibrary: (library: LibraryId) => void }) {
-  const rowRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const row = rowRef.current
-    const pressed = row?.querySelector<HTMLElement>('[aria-pressed="true"]')
-    if (row && pressed && pressed.offsetLeft + pressed.offsetWidth > row.clientWidth) {
-      row.scrollLeft = pressed.offsetLeft - 8
-    }
-  }, [])
-  return (
-    <div ref={rowRef} className="segment library-row" role="group" aria-label="Tracing library">
-      {LIBRARIES.map((item) => (
-        <button key={item.id} type="button" aria-pressed={library === item.id} onClick={() => onLibrary(item.id)}>
-          {item.label}
-        </button>
-      ))}
     </div>
   )
 }
@@ -865,7 +932,7 @@ function ThemePicker({
       <div className="picker-copy">
         <h2>{replacing ? "New set" : "Start a set"}</h2>
         <p>Choose a library and a product. Each slot arrives named, with a faint outline you can trace.</p>
-        <LibrarySegment library={library} onLibrary={onLibrary} />
+        <LibrarySegment choices={LIBRARY_IDS} value={library} onChoose={onLibrary} />
         <p className="picker-license">
           {info.label} is © {info.holder},{" "}
           <a href={info.licenseUrl} target="_blank" rel="noreferrer">
@@ -1015,12 +1082,30 @@ type SurfaceProps = {
   trace: ReactNode
   drawing: boolean
   inkRef: RefObject<SVGPathElement | null>
-  onPointerDown: (event: ReactPointerEvent<SVGSVGElement>) => void
+  onPointerDown: (event: ReactPointerEvent<SVGSVGElement>, landing: Landing) => void
   onPointerMove: (event: ReactPointerEvent<SVGSVGElement>) => void
   onPointerUp: (event: ReactPointerEvent<SVGSVGElement>) => void
+  onTwoFingerTap: () => void
 }
 
-function Surface({ name, mark, trace, drawing, inkRef, onPointerDown, onPointerMove, onPointerUp }: SurfaceProps) {
+function Surface({
+  name,
+  mark,
+  trace,
+  drawing,
+  inkRef,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onTwoFingerTap,
+}: SurfaceProps) {
+  const [touches] = useState(createTouches)
+
+  function lift(event: ReactPointerEvent<SVGSVGElement>) {
+    if (touchUp(touches, event.pointerId, event.timeStamp) === "tap") onTwoFingerTap()
+    else onPointerUp(event)
+  }
+
   return (
     <div className="canvas-stack">
       {trace ? (
@@ -1033,10 +1118,16 @@ function Surface({ name, mark, trace, drawing, inkRef, onPointerDown, onPointerM
         viewBox={`0 0 ${ARTBOARD} ${ARTBOARD}`}
         role="application"
         aria-label={`Drawing surface for ${name}`}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
+        onPointerDown={(event) => {
+          if (event.pointerType === "mouse" && event.button !== 0) return
+          onPointerDown(event, touchDown(touches, event))
+        }}
+        onPointerMove={(event) => {
+          touchMove(touches, event)
+          onPointerMove(event)
+        }}
+        onPointerUp={lift}
+        onPointerCancel={lift}
         onContextMenu={(event) => event.preventDefault()}
       >
         <Grid />

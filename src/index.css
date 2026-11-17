@@ -24,6 +24,7 @@ html, body, #root { min-height: 100%; }
 
 html {
   -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
 }
 
 html, body { overscroll-behavior: none; }
@@ -667,6 +668,28 @@ button:disabled { cursor: default; opacity: 0.45; }
   .name-inline:hover:not(:focus) { background: rgba(28, 27, 25, 0.04); }
 }
 
+.library-trigger {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  border-radius: 999px;
+  padding: 6px 8px 6px 12px;
+  white-space: nowrap;
+}
+
+.menu-chevron {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  transition: transform 200ms var(--ease-out);
+}
+
+.library-trigger[aria-expanded="true"] .menu-chevron { transform: rotate(180deg); }
+
 .draw-title .progress {
   margin: 1px 0 0;
   color: var(--muted);
@@ -678,6 +701,7 @@ button:disabled { cursor: default; opacity: 0.45; }
   display: flex;
   flex-direction: column;
   min-height: 0;
+  touch-action: none;
 }
 
 .draw-stage {
@@ -1162,7 +1186,7 @@ button:disabled { cursor: default; opacity: 0.45; }
 
 .export-trigger[aria-expanded="true"] .export-chevron { transform: rotate(180deg); }
 
-.export-menu {
+.menu {
   inset: auto 0 0 0;
   width: auto;
   max-width: 520px;
@@ -1181,13 +1205,13 @@ button:disabled { cursor: default; opacity: 0.45; }
     display 280ms allow-discrete;
 }
 
-.export-menu:popover-open { transform: none; }
+.menu:popover-open { transform: none; }
 
 @starting-style {
-  .export-menu:popover-open { transform: translateY(100%); }
+  .menu:popover-open { transform: translateY(100%); }
 }
 
-.export-menu::backdrop {
+.menu::backdrop {
   background: rgba(28, 27, 25, 0);
   transition:
     background-color 280ms var(--ease-out),
@@ -1195,13 +1219,13 @@ button:disabled { cursor: default; opacity: 0.45; }
     display 280ms allow-discrete;
 }
 
-.export-menu:popover-open::backdrop { background: rgba(28, 27, 25, 0.28); }
+.menu:popover-open::backdrop { background: rgba(28, 27, 25, 0.28); }
 
 @starting-style {
-  .export-menu:popover-open::backdrop { background: rgba(28, 27, 25, 0); }
+  .menu:popover-open::backdrop { background: rgba(28, 27, 25, 0); }
 }
 
-.export-title {
+.menu-title {
   margin: 0;
   padding: 10px 14px 6px;
   color: var(--faint);
@@ -1239,30 +1263,49 @@ button:disabled { cursor: default; opacity: 0.45; }
 
 .export-menu li button:focus-visible { outline-offset: -2px; }
 
+.library-menu { padding-inline: 16px; }
+
+.library-menu::backdrop,
+.library-menu:popover-open::backdrop { background: transparent; }
+
+.library-menu .menu-title { padding-inline: 0; }
+
+.library-menu .library-row {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.library-menu .library-row button { flex: 1 0 auto; }
+
+.library-menu .setting-note { margin-top: 10px; }
+
+.menu-keys { display: none; }
+
+.menu-keys kbd {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
 .export-label { font-size: 16px; font-weight: 550; }
 
 .export-detail { color: var(--muted); font-size: 13px; }
 
 @media (hover: hover) and (pointer: fine) {
   .export-menu li button:hover { background: rgba(28, 27, 25, 0.05); }
-  .share:hover, .add-form button:hover, .chips button[aria-pressed="false"]:hover { border-color: var(--ink); }
+  .share:hover, .add-form button:hover, .chips button[aria-pressed="false"]:hover, .library-trigger:hover { border-color: var(--ink); }
+  .menu-keys { display: inline; }
 }
 
 @supports (anchor-name: --export) {
   @media (min-width: 721px) {
     .export-trigger { anchor-name: --export; }
-    .export-menu {
-      position-anchor: --export;
+    .library-trigger { anchor-name: --library; }
+    .menu {
       inset: auto;
-      right: anchor(right);
-      bottom: anchor(top);
-      width: 260px;
-      margin: 0 0 8px;
       padding: 6px;
       border: 1px solid var(--line);
       border-radius: 12px;
       box-shadow: 0 18px 40px rgba(48, 38, 22, 0.16);
-      transform-origin: bottom right;
       opacity: 0;
       transform: scale(0.97);
       transition:
@@ -1271,13 +1314,32 @@ button:disabled { cursor: default; opacity: 0.45; }
         overlay 160ms allow-discrete,
         display 160ms allow-discrete;
     }
-    .export-menu:popover-open { opacity: 1; transform: none; }
-    @starting-style {
-      .export-menu:popover-open { opacity: 0; transform: scale(0.97); }
+    .export-menu {
+      position-anchor: --export;
+      right: anchor(right);
+      bottom: anchor(top);
+      width: 260px;
+      margin: 0 0 8px;
+      transform-origin: bottom right;
     }
-    .export-menu::backdrop,
-    .export-menu:popover-open::backdrop { background: transparent; }
-    .export-title { padding: 8px 10px 4px; }
+    .library-menu {
+      position-anchor: --library;
+      right: anchor(right);
+      top: anchor(bottom);
+      width: max-content;
+      max-width: none;
+      margin: 8px 0 0;
+      padding: 6px 12px 12px;
+      transform-origin: top right;
+    }
+    .menu:popover-open { opacity: 1; transform: none; }
+    @starting-style {
+      .menu:popover-open { opacity: 0; transform: scale(0.97); }
+    }
+    .menu::backdrop,
+    .menu:popover-open::backdrop { background: transparent; }
+    .menu-title { padding: 8px 10px 4px; }
+    .library-menu .menu-title { padding-inline: 0; }
     .export-menu li button { min-height: 48px; padding: 6px 10px; }
     .export-label { font-size: 14px; }
     .export-detail { font-size: 12px; }
@@ -1309,7 +1371,7 @@ button:disabled { cursor: default; opacity: 0.45; }
 
 @media (pointer: coarse) {
   input, textarea, select { font-size: 16px; }
-  .draw-actions button, .next, .gallery-head button, .top .toggle { min-height: 44px; }
+  .draw-actions button, .next, .gallery-head button, .top .toggle, .library-trigger { min-height: 44px; }
   .segment button, .chips button, .text-button, .add-form button, .add-form input, .new-set { min-height: 44px; }
   .segment button { min-width: 44px; }
   .strip-cell { width: 44px; height: 44px; }
@@ -1345,18 +1407,18 @@ button:disabled { cursor: default; opacity: 0.45; }
 @media (prefers-reduced-motion: reduce) {
   button:active:not(:disabled) { transform: none; }
   button { transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out); }
-  .set-panel, .hint, .note, .slot-remove, .export-chevron { transition: none; }
+  .set-panel, .hint, .note, .slot-remove, .export-chevron, .menu-chevron { transition: none; }
   @starting-style {
     .set-panel, .hint, .note, .slot-remove { opacity: 1; transform: none; }
   }
-  .export-menu,
-  .export-menu:popover-open {
+  .menu,
+  .menu:popover-open {
     transform: none;
     transition: opacity 120ms linear, overlay 120ms allow-discrete, display 120ms allow-discrete;
   }
-  .export-menu { opacity: 0; }
-  .export-menu:popover-open { opacity: 1; }
+  .menu { opacity: 0; }
+  .menu:popover-open { opacity: 1; }
   @starting-style {
-    .export-menu:popover-open { opacity: 0; transform: none; }
+    .menu:popover-open { opacity: 0; transform: none; }
   }
 }

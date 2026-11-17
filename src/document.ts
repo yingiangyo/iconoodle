@@ -1,5 +1,6 @@
 import { themeSlots } from "./glyphs.ts"
 import { isLibraryId, type LibraryId } from "./libraries.ts"
+import { isSmoothLevel, type SmoothLevel } from "./smooth.ts"
 import { THEMES } from "./themes.ts"
 
 export const ARTBOARD = 24
@@ -20,6 +21,7 @@ export type Sample = {
 
 export type Stroke = {
   readonly samples: readonly Sample[]
+  readonly smooth?: SmoothLevel
 }
 
 export type Icon = {
@@ -270,7 +272,7 @@ function commit(session: Session, id: IconId, stroke: Stroke): EditResult {
     session,
     replaceIcon(session.document, id, {
       ...icon,
-      strokes: [...icon.strokes, { samples }],
+      strokes: [...icon.strokes, stampStroke(samples, stroke.smooth)],
     }),
   )
 }
@@ -398,6 +400,7 @@ function serialize(set: IconSet): string {
           y: sample.y,
           pressure: sample.pressure,
         })),
+        ...(stroke.smooth === undefined ? {} : { smooth: stroke.smooth }),
       })),
     })),
   })
@@ -463,7 +466,11 @@ function parseStroke(value: unknown): Stroke | null {
     if (!Number.isFinite(entry.x) || !Number.isFinite(entry.y) || !Number.isFinite(entry.pressure)) return null
     samples.push({ x: entry.x, y: entry.y, pressure: clampPressure(entry.pressure) })
   }
-  return { samples }
+  return stampStroke(samples, value.smooth)
+}
+
+function stampStroke(samples: readonly Sample[], smooth: unknown): Stroke {
+  return isSmoothLevel(smooth) ? { samples, smooth } : { samples }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

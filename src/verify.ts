@@ -10,12 +10,18 @@ import {
   loadSet,
   openSession,
   saveSet,
+  setFromJSON,
+  setToJSON,
   type Sample,
   type Stroke,
 } from "./document.ts"
 import { exportSet, iconSvg } from "./export.ts"
 import { setFromHash, shareHash } from "./share.ts"
 import { guideConcept, themeSlots } from "./glyphs.ts"
+import { cycleChoice } from "./libraries.ts"
+import { SMOOTH_KEY, readSmooth } from "./smooth.ts"
+import { swipeStep } from "./swipe.ts"
+import { createTouches, touchDown, touchMove, touchUp, type Contact } from "./touches.ts"
 import { guideKey } from "./guides.ts"
 import { THEMES } from "./themes.ts"
 
@@ -96,7 +102,7 @@ check(heavier.d === plain.d, "weight does not rewrite the path")
 check(heavier.strokeWidth === 2.5, "weight changes the stroke width")
 check(/^M[\d.]+ [\d.]+(C[\d. -]+)+$/.test(plain.d), "a freehand stroke is one smooth curve")
 check(/^M[\d.]+ [\d.]+(L[\d.]+ [\d.]+)+$/.test(snapped.d), "a snapped stroke keeps straight segments")
-check(livePath(line.samples, false) === plain.d, "the live pen draws what the commit will draw")
+check(livePath(line, false) === plain.d, "the live pen draws what the commit will draw")
 
 const dotMark = compileIcon(dot.session.document, home)
 check(dotMark.d.startsWith("M") && dotMark.d.includes("L"), "a dot is a zero-length segment")
@@ -167,6 +173,9 @@ if (general) {
   const switched = edit(openSession(heroSet), { kind: "library", library: "phosphor" }).session.document
   check(switched.library === "phosphor" && switched.icons[0].name === hero[0].name, "switching library keeps the names")
   check(guideConcept("phosphor", "home", "house") === "home", "a phosphor guide still resolves home")
+  check(cycleChoice("material", 1) === "off", "cycling libraries wraps to off")
+  check(cycleChoice("off", 1) === "lucide", "cycling off returns to lucide")
+  check(cycleChoice("lucide", -1) === "off", "cycling backward from lucide lands on off")
 }
 
 const blank = await exportSet(createSet(["wallet"]), "svg-zip")
@@ -258,6 +267,113 @@ const closed = compileIcon(
   { ...square.document, cleanup: { straight: true, circle: false, close: true } },
   home,
 )
+const rawWobble: Stroke = { ...wobble.document.icons[0].strokes[0], smooth: 0 }
+const rawStraight = compileIcon(
+  { ...commitOne(rawWobble), cleanup: { straight: true, circle: false, close: false } },
+  home,
+)
+check(rawStraight.d === straightened.d, "straight still snaps when smoothing is off")
+const rawCircle = compileIcon(
+  {
+    ...commitOne({ ...circleStroke(12, 12, 6, 18, 0.2), smooth: 0 }),
+    cleanup: { straight: false, circle: true, close: false },
+  },
+  home,
+)
+check(rawCircle.d === circled.d, "circle still snaps when smoothing is off")
+
+const scribble = stroke(scribblePoints())
+const off = compileIcon(commitOne({ ...scribble, smooth: 0 }), home)
+check(
+  off.d === `M${scribble.samples.map((sample) => `${round2(sample.x)} ${round2(sample.y)}`).join("L")}`,
+  "smoothing off draws a line through every sample",
+)
+const unstamped = compileIcon(commitOne(scribble), home)
+check(
+  unstamped.d ===
+    "M2 12C2.13 12.3 2.18 12.66 2.4 12.9C2.58 13.1 2.88 13.13 3.11 13.25L4.71 10.66L6.48 13.34L8.31 10.66L10.08 13.35L11.91 10.66L13.67 13.34L15.51 10.66L17.26 13.34L19.1 10.67C19.54 11.45 19.95 12.25 20.42 13.01C20.51 13.16 20.67 13.27 20.8 13.39L21.2 13.14",
+  "a stroke with no level compiles as it did before levels existed",
+)
+check(compileIcon(commitOne({ ...scribble, smooth: 2 }), home).d === unstamped.d, "a stroke with no level is medium")
+
+const shaky = jitter(circleStroke(12, 12, 7, 120, 0.12), 0.1)
+const segments = ([0, 1, 2, 3] as const).map(
+  (smooth) => compileIcon(commitOne({ ...shaky, smooth }), home).d.match(/[CL]/g)?.length ?? 0,
+)
+check(segments[0] > segments[1], "low smoothing keeps fewer segments than off")
+check(segments[2] < segments[1] && segments[3] < segments[1], "medium and high keep fewer segments than low")
+check(compileIcon(commitOne({ ...shaky, smooth: 1 }), home).d.includes("C"), "low smoothing still draws curves")
+check(
+  compileIcon({ ...commitOne({ ...shaky, smooth: 0 }), snap: true }, home).d ===
+    compileIcon({ ...commitOne({ ...shaky, smooth: 3 }), snap: true }, home).d,
+  "snap draws the same path at every level",
+)
+check(livePath({ ...scribble, smooth: 0 }, false) === off.d, "the live pen follows its level")
+
+const stampedSet = commitOne({ ...scribble, smooth: 0 })
+check(stampedSet.icons[0].strokes[0]?.smooth === 0, "a new stroke records its smoothness")
+const stampedRaw = setToJSON(stampedSet)
+check(stampedRaw.includes('"smooth":0'), "the stroke keeps its smoothness in the save")
+check(!stampedRaw.includes(SMOOTH_KEY), "the preference is not stored in the set")
+check(setFromJSON(stampedRaw)?.icons[0].strokes[0]?.smooth === 0, "a reload keeps the stroke smoothness")
+check(setFromHash(`#${shareHash(stampedSet)}`)?.icons[0].strokes[0]?.smooth === 0, "a share link keeps the stroke smoothness")
+check(!("smooth" in (setFromJSON(setToJSON(commitOne(scribble)))?.icons[0].strokes[0] ?? {})), "a stroke with no level is saved without one")
+check(readSmooth(memory) === 2, "a missing preference is medium")
+memory.setItem(SMOOTH_KEY, "0")
+check(readSmooth(memory) === 0, "the preference reads back")
+memory.setItem(SMOOTH_KEY, "7")
+check(readSmooth(memory) === 2, "an unknown preference is medium")
+
+check(swipeStep(-60, 5, 300) === 1, "a long swipe left goes to the next icon")
+check(swipeStep(60, 0, 300) === -1, "a long swipe right goes back")
+check(swipeStep(-20, 0, 300) === 0, "a short slow drag does not step")
+check(swipeStep(-30, 2, 40) === 1, "a short flick steps")
+check(swipeStep(-30, 40, 40) === 0, "a vertical flick does not step")
+
+const finger = (pointerId: number, clientX = 100, width = 1): Contact => ({
+  pointerId,
+  pointerType: "touch",
+  clientX,
+  clientY: 100,
+  width,
+  height: width,
+})
+const stylus: Contact = { ...finger(9), pointerType: "pen" }
+
+const pair = createTouches()
+check(touchDown(pair, finger(1)) === "stroke", "the first finger starts a stroke")
+check(touchDown(pair, finger(2, 160)) === "cancel", "a second finger cancels the stroke")
+check(touchUp(pair, 1, 1000) === "lift", "one finger lifting is not yet a tap")
+check(touchUp(pair, 2, 1100) === "tap", "two fingers lifting together are a tap")
+
+const slow = createTouches()
+touchDown(slow, finger(1))
+touchDown(slow, finger(2, 160))
+touchUp(slow, 1, 1000)
+check(touchUp(slow, 2, 1400) === "lift", "fingers lifting far apart are not a tap")
+
+const dots = createTouches()
+touchDown(dots, finger(1))
+touchUp(dots, 1, 1000)
+touchDown(dots, finger(2))
+check(touchUp(dots, 2, 1100) === "lift", "two quick taps of one finger are not a two-finger tap")
+
+const busy = createTouches()
+touchDown(busy, finger(1))
+touchMove(busy, finger(1, 140))
+check(touchDown(busy, finger(2, 200)) === "ignore", "a finger landing during a stroke is ignored")
+check(touchUp(busy, 2, 1000) === "lift" && busy.held.size === 1, "the ignored finger leaves the stroke alone")
+
+const wide = createTouches()
+check(touchDown(wide, finger(1, 100, 60)) === "stroke", "a wide finger draws where no pen has been used")
+touchUp(wide, 1, 1000)
+touchDown(wide, stylus)
+check(touchDown(wide, finger(2)) === "ignore", "a touch is ignored while the pen is down")
+touchUp(wide, stylus.pointerId, 2000)
+check(touchDown(wide, finger(3, 100, 60)) === "ignore", "a wide touch is a palm once a pen has drawn")
+check(touchDown(wide, finger(4)) === "stroke", "a fingertip still draws after the pen")
+check(touchDown(wide, stylus) === "stroke" && wide.held.size === 1, "the pen takes over from a resting touch")
+
 check(closed.d.endsWith("Z"), "a near-closed shape closes")
 check((closed.d.match(/L/g)?.length ?? 0) >= 3, "the closed shape keeps its corners")
 
@@ -301,6 +417,22 @@ if (failures.length > 0) {
   throw new Error(failures.join("\n"))
 }
 console.log("verify ok")
+
+function scribblePoints(): (readonly [number, number])[] {
+  const points: (readonly [number, number])[] = []
+  for (let index = 0; index <= 48; index += 1) {
+    points.push([2 + index * 0.4, 12 + Math.sin(index * 0.7) * 1.4])
+  }
+  return points
+}
+
+function commitOne(mark: Stroke) {
+  return edit(starter, { kind: "commit", id: home, stroke: mark }).session.document
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100
+}
 
 function stroke(points: readonly (readonly [number, number])[]): Stroke {
   const samples: Sample[] = points.map(([x, y]) => ({ x, y, pressure: 0.5 }))
