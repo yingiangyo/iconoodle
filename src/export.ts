@@ -20,7 +20,7 @@ export type Download = {
 export async function exportSet(set: IconSet, kind: ExportKind): Promise<Download> {
   const marks = set.icons.map((icon) => ({
     name: icon.name,
-    mark: compileIcon(set, icon.id, null),
+    mark: compileIcon(set, icon.id),
   }))
   switch (kind) {
     case "svg-zip":
@@ -44,7 +44,7 @@ export async function exportSet(set: IconSet, kind: ExportKind): Promise<Downloa
 }
 
 export function iconSvg(set: IconSet, iconId: IconId): string {
-  return svgDocument(compileIcon(set, iconId, null))
+  return svgDocument(compileIcon(set, iconId))
 }
 
 function variantFiles(set: IconSet): { name: string; body: string }[] {
@@ -52,7 +52,7 @@ function variantFiles(set: IconSet): { name: string; body: string }[] {
   for (const style of CAP_STYLES) {
     for (const weight of WEIGHTS) {
       for (const icon of set.icons) {
-        const mark = compileIcon(set, icon.id, null, {
+        const mark = compileIcon(set, icon.id, {
           weight,
           lineCap: style.lineCap,
           lineJoin: style.lineJoin,

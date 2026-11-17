@@ -19,7 +19,7 @@ export function Gallery({ set, onClose }: { set: IconSet; onClose: () => void })
       </header>
       <ul className="gallery-grid">
         {set.icons.map((icon) => {
-          const mark = compileIcon(set, icon.id, null)
+          const mark = compileIcon(set, icon.id)
           return (
             <li key={icon.id}>
               <svg viewBox={mark.viewBox} fill="none" stroke="currentColor" aria-hidden="true">

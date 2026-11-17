@@ -2,8 +2,10 @@ import type { Cleanup } from "./document.ts"
 
 export type Pt = { readonly x: number; readonly y: number }
 
+export type Joins = "curve" | "corner"
+
 export type Tidy =
-  | { readonly kind: "poly"; readonly points: readonly Pt[]; readonly closed: boolean }
+  | { readonly kind: "poly"; readonly points: readonly Pt[]; readonly closed: boolean; readonly joins: Joins }
   | {
       readonly kind: "arc"
       readonly cx: number
@@ -20,9 +22,9 @@ const STRAIGHT_TOLERANCE = 0.6
 const CIRCLE_ERROR = 0.7
 const CLOSE_GAP = 1.4
 
-export function tidyPoints(points: readonly Pt[], cleanup: Cleanup): Tidy {
+export function tidyPoints(points: readonly Pt[], cleanup: Cleanup, joins: Joins): Tidy {
   if (points.length <= 1 || (!cleanup.straight && !cleanup.circle && !cleanup.close)) {
-    return { kind: "poly", points, closed: false }
+    return { kind: "poly", points, closed: false, joins }
   }
   if (cleanup.circle && points.length >= 6) {
     const arc = fitArc(points)
@@ -30,7 +32,7 @@ export function tidyPoints(points: readonly Pt[], cleanup: Cleanup): Tidy {
   }
   const straightened = cleanup.straight ? straighten(points) : points
   const closed = cleanup.close && shouldClose(straightened)
-  return { kind: "poly", points: straightened, closed }
+  return { kind: "poly", points: straightened, closed, joins: cleanup.straight ? "corner" : joins }
 }
 
 export function tidyOutline(tidy: Tidy): Pt[] {

@@ -5,18 +5,21 @@ const TABS = ["Home", "Search", "Alerts", "You"]
 
 export function Mockup({ marks }: { marks: readonly Mark[] }) {
   const drawn = marks.filter((mark) => mark.d.length > 0)
-  const pool = drawn.length > 0 ? drawn : marks
-  const at = (index: number) => pool[index % Math.max(pool.length, 1)]
+  const at = (index: number) => drawn[index % drawn.length]
   return (
-    <section className="mockups" aria-label="In context">
-      <div className="preview-head">
-        <h2>In context</h2>
+    <section className="mockups" aria-labelledby="mockups-title">
+      <div className="section-head">
+        <h2 id="mockups-title">In context</h2>
         <span>Tab bar, navigation, a button, and a list</span>
       </div>
-      <div className="phones">
-        <Phone tone="light" at={at} />
-        <Phone tone="dark" at={at} />
-      </div>
+      {drawn.length > 0 ? (
+        <div className="phones">
+          <Phone tone="light" at={at} />
+          <Phone tone="dark" at={at} />
+        </div>
+      ) : (
+        <p className="empty">Your drawn icons fill in a sample app screen here.</p>
+      )}
     </section>
   )
 }
@@ -37,10 +40,10 @@ function Phone({ tone, at }: { tone: "light" | "dark"; at: (index: number) => Ma
           </li>
         ))}
       </ul>
-      <button type="button" className="phone-button">
+      <span className="phone-button">
         <Glyph mark={at(5)} size={16} />
         Save changes
-      </button>
+      </span>
       <div className="phone-tabs">
         {TABS.map((label, index) => (
           <div key={label} className={index === 0 ? "is-current" : undefined}>
