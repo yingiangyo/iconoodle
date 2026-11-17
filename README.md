@@ -17,7 +17,11 @@ Design notes for later work live in `.cursor/skills/`. They are Emil Kowalski's 
 
 ## Drawing
 
-The first screen is one icon. Draw it, then Next (or Enter, or the right arrow) saves the stroke you already committed and opens the next slot. Back and the left arrow return to the previous icon. The name sits in the header, and you tap it to rename. The count under it reads like `7 of 24`. The grid, the consistency checker, the size preview, and the mockups live on Set.
+The first screen is one icon. Draw it, then Next (or Enter, or the right arrow) saves the stroke you already committed and opens the next slot. Back and the left arrow return to the previous icon. The name sits in the header, and you tap it to rename. The count under it reads like `7 of 24`. The chip beside the name shows the tracing library. It opens a menu that switches the library or turns the guide off, and `[` and `]` step through the same choices.
+
+On a phone, Back, Undo, Clear, and Next sit in a bottom bar. Swipe beside the canvas, or along that bar, to move between icons. The canvas itself stays for drawing. Two fingers tapped together on the canvas undo. A pen always draws. Touches are ignored while it is down, and after its first stroke a wide touch counts as a palm. On a touch device, Share and Export open the share sheet when the browser offers it. A production build registers a service worker and can be added to the home screen.
+
+The grid, the drawing settings, the consistency checker, the size preview, and the mockups live on Set.
 
 ## Architecture
 
@@ -25,7 +29,7 @@ The first screen is one icon. Draw it, then Next (or Enter, or the right arrow) 
 
 `src/compile.ts` is the only function that turns samples into a picture. The slot grid, the artboard, the preview strip, and the downloads all call `compileIcon`.
 
-`src/export.ts` packs that picture as SVG files, a sprite, React components, style variants, and a Figma sheet. `src/App.tsx` is the drawing surface, the shortcuts, and the file save.
+`src/export.ts` packs that picture as SVG files, a sprite, React components, style variants, and a Figma sheet. `src/App.tsx` is the drawing surface, the shortcuts, and the file save. `src/touches.ts` decides which contact on the canvas draws, and `src/swipe.ts` turns a drag beside the canvas into a step.
 
 `src/themes.ts` is the list of starter concepts for each product type. The first screen, and New set, ask you to pick a library and then one of those themes. UI basics on Lucide is the same set the app used to open with.
 
@@ -41,7 +45,7 @@ Share copies a read-only link. The set is compressed with `lz-string` into the U
 
 ## Tracing libraries
 
-Pick Lucide, Heroicons, Phosphor, Tabler, or Material Symbols when you start a set. You can switch later from Set. Switching changes the faint outline only. Export names stay as they were when the set was created, so a drawing you already named is not renamed out from under you. Each library is loaded when you choose it, and each glyph is its own chunk.
+Pick Lucide, Heroicons, Phosphor, Tabler, or Material Symbols when you start a set. You can switch later from the chip in the drawing header or from Set. Switching changes the faint outline only. Export names stay as they were when the set was created, so a drawing you already named is not renamed out from under you. Each library is loaded when you choose it, and each glyph is its own chunk.
 
 | Library | License | Holder |
 | --- | --- | --- |
@@ -55,7 +59,7 @@ Pick Lucide, Heroicons, Phosphor, Tabler, or Material Symbols when you start a s
 
 ## Why a centerline
 
-The icons are open paths with round caps and a shared `stroke-width` of 1.5, 2, or 2.5 on a 24 by 24 grid. A short moving average and `simplify-js` drop pen jitter, then a freehand stroke is drawn as cubic curves through the kept points. A sharp turn stays a corner. Straight and Snap keep straight segments. Snap, when it is on, rounds a copy of the samples to the grid and leaves the stored hand alone.
+The icons are open paths with round caps and a shared `stroke-width` of 1.5, 2, or 2.5 on a 24 by 24 grid. A short moving average and `simplify-js` drop pen jitter, then a freehand stroke is drawn as cubic curves through the kept points. A sharp turn stays a corner. Smoothness (Off, Low, Med, High) sets how wide that average is and how much `simplify-js` drops, for strokes you draw from then on. Off draws straight segments through every sample. Med is the default, and a stroke saved without a level is drawn at Med. The preference is saved in the browser, not in the set. Each new stroke records the level it was drawn with, so older strokes stay as they were and a share link shows them the same way. Straight and Snap keep straight segments. Snap, when it is on, rounds a copy of the samples to the grid, draws every stroke the same way whatever its level, and leaves the stored hand alone.
 
 A filled outline bakes the width into the shape. Changing the set weight would mean rebuilding every outline, and small wobbles become blobs at 16px. A centerline keeps one width for the whole set, and that width is still a stroke when the SVG scales to 16, 20, 24, or 32. `perfect-freehand` is not a dependency.
 

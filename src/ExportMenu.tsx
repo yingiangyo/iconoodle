@@ -31,14 +31,14 @@ export function ExportMenu({ onExport }: { onExport: (kind: ExportKind) => void 
         id={id}
         ref={menuRef}
         popover="auto"
-        className="export-menu"
+        className="menu export-menu"
         onToggle={(event) => {
           const isOpen = event.newState === "open"
           setOpen(isOpen)
           if (isOpen) menuRef.current?.querySelector("button")?.focus()
         }}
       >
-        <p className="export-title">Download as</p>
+        <p className="menu-title">Download as</p>
         <ul>
           {EXPORT_KINDS.map((kind) => (
             <li key={kind}>

@@ -10,6 +10,7 @@ import {
   type Stroke,
   type Weight,
 } from "./document.ts"
+import { SMOOTH_DEFAULT, type SmoothLevel } from "./smooth.ts"
 
 export type LineCap = "butt" | "round" | "square"
 export type LineJoin = "miter" | "round" | "bevel"
@@ -38,11 +39,16 @@ type Hand = {
   readonly joins: Joins
 }
 
-const FREEHAND: Hand = { snap: false, smoothing: 0.6, tolerance: 0.2, joins: "curve" }
+const FREEHAND: Record<SmoothLevel, Hand> = {
+  0: { snap: false, smoothing: 0, tolerance: 0, joins: "corner" },
+  1: { snap: false, smoothing: 0.3, tolerance: 0.1, joins: "curve" },
+  2: { snap: false, smoothing: 0.6, tolerance: 0.2, joins: "curve" },
+  3: { snap: false, smoothing: 1.4, tolerance: 0.25, joins: "curve" },
+}
 const SNAPPED: Hand = { snap: true, smoothing: 0, tolerance: 0.35, joins: "corner" }
 const CORNER_TURN = Math.PI / 3
 // A smooth arc simplified at tolerance t turns by at most about 8t / length at each kept point.
-const CORNER_BEND = 12 * FREEHAND.tolerance
+const CORNER_BEND_PER_TOLERANCE = 12
 
 export function compileIcon(set: IconSet, iconId: IconId, paint?: Paint): Mark {
   const icon = set.icons.find((item) => item.id === iconId)
@@ -65,16 +71,16 @@ export function compileIcon(set: IconSet, iconId: IconId, paint?: Paint): Mark {
   }
 }
 
-export function livePath(samples: readonly Sample[], snap: boolean): string {
-  return strokeToPath({ samples }, snap, CLEANUP_OFF)
+export function livePath(stroke: Stroke, snap: boolean): string {
+  return strokeToPath(stroke, snap, CLEANUP_OFF)
 }
 
 export function drawnPoints(set: IconSet, iconId: IconId): Pt[] {
   const icon = set.icons.find((item) => item.id === iconId)
   if (!icon) return []
-  const hand = handFor(set.snap)
   const points: Pt[] = []
   for (const stroke of icon.strokes) {
+    const hand = handFor(stroke, set.snap)
     const prepared = prepare(stroke, hand)
     if (prepared.length === 0) continue
     points.push(...tidyOutline(tidyPoints(prepared, set.cleanup, hand.joins)))
@@ -83,15 +89,15 @@ export function drawnPoints(set: IconSet, iconId: IconId): Pt[] {
 }
 
 function strokeToPath(stroke: Stroke, snap: boolean, cleanup: Cleanup): string {
-  const hand = handFor(snap)
+  const hand = handFor(stroke, snap)
   const points = prepare(stroke, hand)
   if (points.length === 0) return ""
   if (points.length === 1) return dot(points[0])
-  return pathFor(tidyPoints(points, cleanup, hand.joins))
+  return pathFor(tidyPoints(points, cleanup, hand.joins), hand)
 }
 
-function handFor(snap: boolean): Hand {
-  return snap ? SNAPPED : FREEHAND
+function handFor(stroke: Stroke, snap: boolean): Hand {
+  return snap ? SNAPPED : FREEHAND[stroke.smooth ?? SMOOTH_DEFAULT]
 }
 
 function prepare(stroke: Stroke, hand: Hand): Pt[] {
@@ -99,11 +105,11 @@ function prepare(stroke: Stroke, hand: Hand): Pt[] {
   return simplifyPoints(smooth(placed, hand.smoothing), hand.tolerance)
 }
 
-function pathFor(tidy: Tidy): string {
+function pathFor(tidy: Tidy, hand: Hand): string {
   if (tidy.kind === "arc") return arcPath(tidy)
   if (tidy.points.length === 0) return ""
   if (tidy.points.length === 1) return dot(tidy.points[0])
-  if (tidy.joins === "curve") return curvePath(tidy.points, tidy.closed)
+  if (tidy.joins === "curve") return curvePath(tidy.points, tidy.closed, CORNER_BEND_PER_TOLERANCE * hand.tolerance)
   const [first, ...rest] = tidy.points
   let path = `M${num(first.x)} ${num(first.y)}`
   for (const point of rest) path += `L${num(point.x)} ${num(point.y)}`
@@ -113,9 +119,9 @@ function pathFor(tidy: Tidy): string {
 
 // Each handle runs along the neighbour chord and is a third of its own segment, so a long
 // straight run keeps its direction and the bend happens in the short segments around it.
-function curvePath(points: readonly Pt[], closed: boolean): string {
+function curvePath(points: readonly Pt[], closed: boolean, cornerBend: number): string {
   const count = points.length
-  const tangents = points.map((_, index) => tangentAt(points, index, closed))
+  const tangents = points.map((_, index) => tangentAt(points, index, closed, cornerBend))
   const [first] = points
   let path = `M${num(first.x)} ${num(first.y)}`
   const segments = closed ? count : count - 1
@@ -138,7 +144,7 @@ function curvePath(points: readonly Pt[], closed: boolean): string {
   return path
 }
 
-function tangentAt(points: readonly Pt[], index: number, closed: boolean): Pt | null {
+function tangentAt(points: readonly Pt[], index: number, closed: boolean, cornerBend: number): Pt | null {
   const count = points.length
   if (!closed && (index === 0 || index === count - 1)) return null
   const before = points[(index - 1 + count) % count]
@@ -150,7 +156,7 @@ function tangentAt(points: readonly Pt[], index: number, closed: boolean): Pt | 
   const outY = after.y - here.y
   const turn = Math.abs(Math.atan2(inX * outY - inY * outX, inX * outX + inY * outY))
   const shorter = Math.min(Math.hypot(inX, inY), Math.hypot(outX, outY))
-  if (turn > CORNER_TURN || turn * shorter > CORNER_BEND) return null
+  if (turn > CORNER_TURN || turn * shorter > cornerBend) return null
   return direction(before, after)
 }
 
@@ -221,7 +227,7 @@ function smooth(points: Pt[], radius: number): Pt[] {
 }
 
 function simplifyPoints(points: Pt[], tolerance: number): Pt[] {
-  if (points.length <= 2) return points
+  if (tolerance === 0 || points.length <= 2) return points
   return simplify(points, tolerance, true)
 }
 
